@@ -16,9 +16,6 @@ break rust_begin_unwind
 # next 4
 # end
 
-# *try* to stop at the user entry point (it might be gone due to inlining)
-break main
-
 monitor arm semihosting enable
 
 # # send captured ITM to the file itm.fifo
@@ -36,5 +33,8 @@ monitor arm semihosting enable
 
 load
 
-# start the process but immediately halt the processor
-stepi
+continue
+
+define hook-quit
+    set confirm off
+end
