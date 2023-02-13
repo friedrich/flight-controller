@@ -635,28 +635,21 @@ impl<'a> Hal for RadioHal<'a> {
     }
 }
 
-#[entry]
-fn main() -> ! {
-    let mut cp = cortex_m::Peripherals::take().unwrap();
-    let dp = pac::Peripherals::take().unwrap();
-
-    let stim = RefCell::new(&mut cp.ITM.stim[0]);
-    let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
-
-    init_led(&dp);
-    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
-
-    init_spi(&dp);
-    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
-
-    // wait for accelerometer to become available
-    iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
-    while accel_read(&dp, 0x0f) != 0x6b {
-        delay.borrow_mut().delay_ms(1);
-    }
-
-    accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
-    accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
+fn radio<'a>(
+    dp: &'a pac::Peripherals,
+    delay: &'a RefCell<delay::Delay>,
+    stim: &'a RefCell<&'a mut itm::Stim>,
+) {
+    // loop {
+    //     let mut data = [0x80, 0x00];
+    //     spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    //     if data[0] & 0b11111100 == 0b01000100 {
+    //         led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
+    //     } else {
+    //         led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
+    //     }
+    //     delay.borrow_mut().delay_ms(10);
+    // }
 
     // // wait for radio to become available
     // loop {
@@ -675,20 +668,24 @@ fn main() -> ! {
     iprintln!(&mut stim.borrow_mut(), "waiting for radio...");
     let mut success_count = 0;
     loop {
-        let address: u16 = 0x0153;
-        let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
+        let mut data = [0x80, 0x00];
         spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
-        let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
-        if firmware & 0xff00 == 0xa900 {
+        if data[0] & 0b11111100 == 0b01000100 {
+            // let address: u16 = 0x0153;
+            // let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
+            // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+            // print_response1(&mut stim.borrow_mut(), data[0]);
+            // let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
+            // if firmware & 0xff00 == 0xa900 && (data[0] >> 2) & 0x7 != 0x7 {
             success_count += 1;
             if success_count == 10 {
-                iprintln!(&mut stim.borrow_mut(), "SX128x firmware: {:04x}", firmware);
+                // iprintln!(&mut stim.borrow_mut(), "SX128x firmware: {:04x}", firmware);
                 break;
             }
         } else {
             success_count = 0;
         }
-        delay.borrow_mut().delay_ms(10); // not necessary
+        delay.borrow_mut().delay_ms(10);
     }
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
@@ -713,20 +710,21 @@ fn main() -> ! {
     //     delay.delay_ms(10); // not necessary
     // }
 
-    // let radio_config = radio_sx128x::Config::gfsk();
-    // let mut radio = radio_sx128x::Sx128x::new(
-    //     RadioHal {
-    //         dp: &dp,
-    //         delay: &delay,
-    //         stim: &stim,
-    //     },
-    //     &radio_config,
-    // )
-    // .unwrap();
-    // // radio.calibrate(radio_sx128x::device::CalibrationParams::all()).unwrap();
-    // let data = [1, 2, 3];
-    // radio.start_transmit(&data).unwrap();
-    // loop {}
+    let radio_config = radio_sx128x::Config::gfsk();
+    let mut radio = radio_sx128x::Sx128x::new(
+        RadioHal {
+            dp: dp,
+            delay: delay,
+            stim: &stim,
+        },
+        &radio_config,
+    )
+    .unwrap();
+    // radio.calibrate(radio_sx128x::device::CalibrationParams::all()).unwrap();
+    // delay.borrow_mut().delay_ms(100);
+    let data = [1, 2, 3];
+    radio.start_transmit(&data).unwrap();
+    loop {}
 
     // self.set_regulator_mode(config.regulator_mode)?;
     // self.config.regulator_mode = config.regulator_mode;
@@ -757,7 +755,7 @@ fn main() -> ! {
     // TODO: do we need to calibrate the internal RC oscillator?
     // Calibrate()
     // let mut data = [0x89, 0b00111111];
-    let mut data = [0x89, 0b00000010];
+    let mut data = [0x89, 0b00001010];
     spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "Calibrate", &data);
 
@@ -819,25 +817,41 @@ fn main() -> ! {
     // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
     // iprintln!(&mut stim.borrow_mut(), "response: {:?}", data);
 
-    // // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
-    // let mut data = [0x83, 0x00, 0x00, 0x00];
-    // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
-    // print_response(&mut stim.borrow_mut(), "SetTx", &data);
+    // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
+    let mut data = [0x83, 0x00, 0x00, 0x00];
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetTx", &data);
 
     // GetPacketStatus()
     let mut data = [0x1d, 0, 0, 0, 0, 0, 0];
     spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
-    // }
-    loop {}
+}
 
-    loop {
-        let address: u16 = 0x9ce;
-        let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
-        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
-        let data = &data[4..];
-        iprintln!(&mut stim.borrow_mut(), "data: {:?}", data);
+#[entry]
+fn main() -> ! {
+    let mut cp = cortex_m::Peripherals::take().unwrap();
+    let dp = pac::Peripherals::take().unwrap();
+
+    let stim = RefCell::new(&mut cp.ITM.stim[0]);
+    let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
+
+    init_led(&dp);
+    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
+
+    init_spi(&dp);
+    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
+
+    // wait for accelerometer to become available
+    iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
+    while accel_read(&dp, 0x0f) != 0x6b {
+        delay.borrow_mut().delay_ms(1);
     }
+
+    radio(&dp, &delay, &stim);
+
+    accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
+    accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
 
     // let mut prev = None;
     let mut cycle = 0;
