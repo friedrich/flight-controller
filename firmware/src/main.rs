@@ -203,13 +203,7 @@ fn servos(p: &pac::Peripherals, left_percent: u8, right_percent: u8, back_percen
     p.TIM4.cr1.modify(|_, w| w.cen().set_bit());
 }
 
-// PA4: !ACCEL_CS
-// PA3: !RADIO_CS
 // PB0: !GNSS_CS, max 10 MHz
-
-// PA5: SCK
-// PA6: CONTROLLER_SDI
-// PA7: CONTROLLER_SDO
 
 // fn init_clocks(dp: &pac::Peripherals, delay: &mut delay::Delay) {
 //     // enable IO port clocks
@@ -382,6 +376,27 @@ fn read_accelerometer_data(dp: &pac::Peripherals) -> AccelerometerData {
     }
 }
 
+fn spi_radio_transmit(dp: &pac::Peripherals, delay: &mut delay::Delay, data: &mut [u8]) {
+    enable_spi(dp, 0, false, false); // max 18 MHz according to datasheet of SX1280
+
+    // need to read and write single bytes
+    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
+
+    dp.GPIOA.odr.modify(|_, w| w.odr3().low());
+    delay.delay_us(125_u32); // TODO: correct?
+
+    for x in data {
+        unsafe { ptr::write_volatile(dr, *x) };
+        while dp.SPI1.sr.read().frlvl() == 0 {}
+        *x = unsafe { ptr::read_volatile(dr) };
+    }
+
+    // TODO: delay?
+    dp.GPIOA.odr.modify(|_, w| w.odr3().high());
+
+    disable_spi(dp);
+}
+
 #[entry]
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
@@ -401,6 +416,25 @@ fn main() -> ! {
 
     accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
     accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
+
+    // wait for radio to become available
+    loop {
+        let address: u16 = 0x9ce;
+        let mut data = [0x18, (address >> 8) as u8, address as u8, 1, 2, 3, 4, 5];
+        spi_radio_transmit(&dp, &mut delay, &mut data);
+        // hprintln!("status: {:?}", &data);
+
+        let address: u16 = 0x9ce;
+        let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
+        spi_radio_transmit(&dp, &mut delay, &mut data);
+        let data = &data[4..];
+        // hprintln!("data: {:?}", data);
+        if data == [1, 2, 3, 4, 5] {
+            break;
+        }
+
+        delay.delay_ms(10); // not necessary
+    }
 
     // let mut prev = None;
     let mut cycle = 0;
