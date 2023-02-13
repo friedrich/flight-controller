@@ -7,6 +7,7 @@ use cortex_m::delay;
 use cortex_m::peripheral::itm;
 use cortex_m::{iprint, iprintln};
 use cortex_m_rt::entry;
+use cortex_m_semihosting::{hprint, hprintln};
 use embedded_hal::digital::PinState;
 use panic_itm as _;
 use paste::paste;
@@ -54,10 +55,10 @@ macro_rules! pin_mode_alternate {
 }
 
 fn init_led(dp: &pac::Peripherals) {
+    use gpiob::afrl::AFRL0_A::{Af10, Af2};
     use gpiob::ospeedr::OSPEEDR0_A::LowSpeed;
     use gpiob::otyper::OT0_A::OpenDrain;
     use gpiob::pupdr::PUPDR0_A::Floating;
-    use gpiob::afrl::AFRL0_A::{Af2, Af10};
 
     // enable IO port B clock
     dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
@@ -436,6 +437,73 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
 
 //     // ....
 // }
+
+fn spi_gnss_transmit(
+    dp: &pac::Peripherals,
+    stim: &mut itm::Stim,
+    delay: &mut delay::Delay,
+    message_class: u8,
+    message_id: u8,
+    payload: &[u8],
+    ret: &mut [u8],
+) -> usize {
+    enable_spi(dp, 7, false, false); // max 5.5 MHz for GNSS receiver
+
+    // need to read and write single bytes
+    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
+
+    dp.GPIOB.odr.modify(|_, w| w.odr0().low());
+    // TODO: delay?
+
+    let mut data = [0; 256];
+    let mut data = &mut data[0..payload.len() + 8];
+
+    data[0] = 0xb5;
+    data[1] = 0x62;
+    data[2] = message_class;
+    data[3] = message_id;
+    data[4] = payload.len() as u8;
+    data[5] = (payload.len() >> 8) as u8;
+    data[6..payload.len() + 6].copy_from_slice(payload);
+
+    let mut checksum_a: u8 = 0;
+    let mut checksum_b: u8 = 0;
+    for x in &data[2..data.len() - 2] {
+        checksum_a = checksum_a.wrapping_add(*x);
+        checksum_b = checksum_b.wrapping_add(checksum_a);
+    }
+
+    data[data.len() - 2] = checksum_a;
+    data[data.len() - 1] = checksum_b;
+
+    // for x in data_send.iter() {
+    //     iprint!(stim, "{:02x} ", x);
+    // }
+    // iprintln!(stim, "");
+
+    let mut size = 0;
+
+    for i in 0..ret.len() {
+        let x = data.get(i).cloned().unwrap_or(0xff);
+        unsafe { ptr::write_volatile(dr, x) };
+        while dp.SPI1.sr.read().frlvl() == 0 {}
+        let x = unsafe { ptr::read_volatile(dr) };
+        // if i >= ret.len() && x == 0xff {
+        //     break;
+        // }
+        ret[i] = x;
+        if x != 0xff {
+            size = i;
+        }
+    }
+
+    // TODO: delay?
+    dp.GPIOB.odr.modify(|_, w| w.odr0().high());
+
+    disable_spi(dp);
+
+    size
+}
 
 struct RadioHal<'a> {
     dp: &'a pac::Peripherals,
@@ -874,6 +942,27 @@ fn accel<'a>(
     }
 }
 
+fn gnss<'a>(dp: &'a pac::Peripherals, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
+    led(&dp, 0, 0, LED_COUNTER_PERIOD / 10);
+    iprintln!(stim, "GNSS");
+
+    // need to read and write single bytes
+    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
+
+    loop {
+        let mut ret = [0; 256];
+        // let size = spi_gnss_transmit(dp, stim, delay, 0x04, 0x04, &[], &mut ret);
+        let size = spi_gnss_transmit(dp, stim, delay, 0x21, 0x08, &[], &mut ret);
+        let ret = &ret[0..size];
+        if !ret.is_empty() {
+            for x in ret {
+                iprint!(stim, "{}", *x as char);
+            }
+            iprintln!(stim, "\n-----");
+        }
+    }
+}
+
 #[entry]
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
@@ -895,7 +984,9 @@ fn main() -> ! {
     }
 
     // radio(&dp, &delay, &stim);
-    accel(&dp, &delay, &stim);
+    // accel(&dp, &delay, &stim);
+
+    gnss(&dp, &mut delay.borrow_mut(), &mut stim.borrow_mut());
 
     loop {}
 }
