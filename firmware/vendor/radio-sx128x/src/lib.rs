@@ -2,7 +2,6 @@
 // Copyright 2018 Ryan Kurte
 
 #![no_std]
-#![feature(associated_type_defaults)]
 
 use core::convert::TryFrom;
 use core::fmt::Debug;
