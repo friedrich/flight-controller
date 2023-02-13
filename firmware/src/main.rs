@@ -1,15 +1,17 @@
 #![no_std]
 #![no_main]
 
-use panic_halt as _;
-
+use core::cell::RefCell;
 use core::ptr;
 use cortex_m::delay;
-use cortex_m::iprintln;
 use cortex_m::peripheral::itm;
+use cortex_m::{iprint, iprintln};
 use cortex_m_rt::entry;
-use cortex_m_semihosting::hprintln;
+use embedded_hal::digital::PinState;
+use panic_halt as _;
 use paste::paste;
+use radio::Transmit;
+use radio_sx128x::base::Hal;
 use stm32g4::stm32g4a1 as pac;
 use stm32g4::stm32g4a1::{gpioa, gpiob};
 
@@ -399,12 +401,16 @@ fn spi_radio_transmit(dp: &pac::Peripherals, delay: &mut delay::Delay, data: &mu
     disable_spi(dp);
 }
 
+fn print_response1(stim: &mut itm::Stim, response: u8) {
+    let circuit = response >> 5;
+    let status = (response >> 2) & 0x7;
+    iprintln!(stim, " - {:x} {:x}", circuit, status);
+}
+
 fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
     iprintln!(stim, "{}:", label);
     for x in data {
-        let circuit = x >> 5;
-        let status = (x >> 2) & 0x7;
-        iprintln!(stim, "{:x} {:x}", circuit, status);
+        print_response1(stim, *x);
     }
 }
 
@@ -444,51 +450,297 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
 //     // ....
 // }
 
-struct RadioHal {}
+struct RadioHal<'a> {
+    dp: &'a pac::Peripherals,
+    delay: &'a RefCell<delay::Delay>,
+    stim: &'a RefCell<&'a mut itm::Stim>,
+}
+
+impl<'a> Hal for RadioHal<'a> {
+    type CommsError = ();
+
+    type PinError = ();
+
+    type DelayError = ();
+
+    fn reset(
+        &mut self,
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(&mut self.stim.borrow_mut(), "reset()");
+        Ok(())
+    }
+
+    fn get_busy(
+        &mut self,
+    ) -> Result<PinState, radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>>
+    {
+        unimplemented!("get_busy");
+    }
+
+    fn get_dio(
+        &mut self,
+    ) -> Result<PinState, radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>>
+    {
+        unimplemented!("get_dio");
+    }
+
+    fn delay_ms(&mut self, ms: u32) -> Result<(), Self::DelayError> {
+        unimplemented!("delay_ms");
+    }
+
+    fn delay_us(&mut self, us: u32) -> Result<(), Self::DelayError> {
+        unimplemented!("delay_us");
+    }
+
+    fn write_cmd(
+        &mut self,
+        command: u8,
+        data: &[u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "write_cmd(0x{:02x}, {:?})",
+            command,
+            data
+        );
+
+        let mut buffer = [0; 256];
+        let mut buffer = &mut buffer[0..data.len() + 1];
+
+        buffer[0] = command;
+        buffer[1..].copy_from_slice(data);
+
+        spi_radio_transmit(self.dp, &mut self.delay.borrow_mut(), &mut buffer);
+
+        // print_response1(&mut self.stim.borrow_mut(), buffer[0]);
+        for x in buffer {
+            print_response1(&mut self.stim.borrow_mut(), *x);
+        }
+
+        Ok(())
+    }
+
+    fn read_cmd(
+        &mut self,
+        command: u8,
+        data: &mut [u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "read_cmd(0x{:02x}, {:?})",
+            command,
+            data
+        );
+
+        let mut buffer = [0; 256];
+        let mut buffer = &mut buffer[0..data.len() + 1];
+
+        buffer[0] = command;
+        buffer[1..].copy_from_slice(data);
+
+        spi_radio_transmit(self.dp, &mut self.delay.borrow_mut(), &mut buffer);
+        data.copy_from_slice(&buffer[1..]);
+
+        for x in buffer {
+            print_response1(&mut self.stim.borrow_mut(), *x);
+        }
+
+        Ok(())
+    }
+
+    fn write_regs(
+        &mut self,
+        reg: u16,
+        data: &[u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "write_regs(0x{:04x}, {:?})",
+            reg,
+            data
+        );
+        Ok(())
+    }
+
+    fn read_regs(
+        &mut self,
+        reg: u16,
+        data: &mut [u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "read_regs(0x{:04x}, {:?})",
+            reg,
+            data
+        );
+        data[0] = 0xa9;
+        data[1] = 0xb5;
+        Ok(())
+    }
+
+    fn write_buff(
+        &mut self,
+        offset: u8,
+        data: &[u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "write_buff(0x{:02x}, {:?})",
+            offset,
+            data
+        );
+        Ok(())
+    }
+
+    fn read_buff(
+        &mut self,
+        offset: u8,
+        data: &mut [u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "read_buff(0x{:02x}, {:?})",
+            offset,
+            data
+        );
+        Ok(())
+    }
+
+    fn prefix_read(
+        &mut self,
+        prefix: &[u8],
+        data: &mut [u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "prefix_read({:?}, {:?})",
+            prefix,
+            data
+        );
+        unimplemented!("prefix_read");
+    }
+
+    fn prefix_write(
+        &mut self,
+        prefix: &[u8],
+        data: &[u8],
+    ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
+        iprintln!(
+            &mut self.stim.borrow_mut(),
+            "prefix_write({:?}, {:?})",
+            prefix,
+            data
+        );
+        unimplemented!("prefix_write");
+    }
+}
 
 #[entry]
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
-    let stim = &mut cp.ITM.stim[0];
-
-    let mut delay = cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY);
+    let stim = RefCell::new(&mut cp.ITM.stim[0]);
+    let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
 
     init_led(&dp);
     led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
 
     init_spi(&dp);
-    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 2, 0);
+    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
 
     // wait for accelerometer to become available
+    iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
     while accel_read(&dp, 0x0f) != 0x6b {
-        delay.delay_ms(1);
+        delay.borrow_mut().delay_ms(1);
     }
 
     accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
     accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
 
+    // // wait for radio to become available
+    // loop {
+    //     let mut data = [0xc0, 0]; // GetStatus
+    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     print_response(stim, "GetStatus", &data);
+    //     if data[1] & 0b00011100 ==  {
+    //         iprintln!(&mut stim.borrow_mut(), "radio firmware: 0x{:04x}", firmware);
+    //         break;
+    //     }
+
+    //     delay.delay_ms(10); // not necessary
+    // }
+
     // wait for radio to become available
+    iprintln!(&mut stim.borrow_mut(), "waiting for radio...");
+    let mut success_count = 0;
     loop {
-        let address: u16 = 0x9ce;
-        let mut data = [0x18, (address >> 8) as u8, address as u8, 1, 2, 3, 4, 5];
-        spi_radio_transmit(&dp, &mut delay, &mut data);
-        // iprintln!(stim, "status: {:?}", &data);
-
-        let address: u16 = 0x9ce;
-        let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
-        spi_radio_transmit(&dp, &mut delay, &mut data);
-        let data = &data[4..];
-        // iprintln!(stim, "data: {:?}", data);
-        if data == [1, 2, 3, 4, 5] {
-            break;
+        let address: u16 = 0x0153;
+        let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
+        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+        let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
+        if firmware & 0xff00 == 0xa900 {
+            success_count += 1;
+            if success_count == 10 {
+                iprintln!(&mut stim.borrow_mut(), "SX128x firmware: {:04x}", firmware);
+                break;
+            }
+        } else {
+            success_count = 0;
         }
-
-        delay.delay_ms(10); // not necessary
+        delay.borrow_mut().delay_ms(10); // not necessary
     }
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
+    // delay.borrow_mut().delay_ms(100);
+
+    // // test radio reading and writing
+    // loop {
+    //     let address: u16 = 0x9ce;
+    //     let mut data = [0x18, (address >> 8) as u8, address as u8, 1, 2, 3, 4, 5];
+    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     // iprintln!(&mut stim.borrow_mut(), "status: {:?}", &data);
+
+    //     let address: u16 = 0x9ce;
+    //     let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
+    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     let data = &data[4..];
+    //     // iprintln!(&mut stim.borrow_mut(), "data: {:?}", data);
+    //     if data == [1, 2, 3, 4, 5] {
+    //         break;
+    //     }
+
+    //     delay.delay_ms(10); // not necessary
+    // }
+
+    // let radio_config = radio_sx128x::Config::gfsk();
+    // let mut radio = radio_sx128x::Sx128x::new(
+    //     RadioHal {
+    //         dp: &dp,
+    //         delay: &delay,
+    //         stim: &stim,
+    //     },
+    //     &radio_config,
+    // )
+    // .unwrap();
+    // // radio.calibrate(radio_sx128x::device::CalibrationParams::all()).unwrap();
+    // let data = [1, 2, 3];
+    // radio.start_transmit(&data).unwrap();
+    // loop {}
+
+    // self.set_regulator_mode(config.regulator_mode)?;
+    // self.config.regulator_mode = config.regulator_mode;
+
+    // // Update modem and channel configuration
+    // self.set_channel(&config.channel)?;
+    // self.config.channel = config.channel.clone();
+
+    // self.configure_modem(&config.modem)?;
+    // self.config.modem = config.modem.clone();
+
+    // // Update power amplifier configuration
+    // self.set_power_ramp(config.pa_config.power, config.pa_config.ramp_time)?;
+    // self.config.pa_config = config.pa_config.clone();
 
     // TODO: ??????
     // To perform the calibration the Calibrate( calibParam ) function, opcode 0x89, must be used with the calibration parameters configured as follows:
@@ -496,67 +748,95 @@ fn main() -> ! {
     // Then we call the calibration function:
     // Radio.Calibrate( calibParam );
 
+    // loop {
     // SetStandby(STDBY_RC)
     let mut data = [0x80, 0x00];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetStandby", &data);
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetStandby", &data);
+
+    // TODO: do we need to calibrate the internal RC oscillator?
+    // Calibrate()
+    // let mut data = [0x89, 0b00111111];
+    let mut data = [0x89, 0b00000010];
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "Calibrate", &data);
+
+    // wait for calibration to finish - this is not documented
+    loop {
+        let mut data = [0xc0, 0]; // GetStatus
+        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+        print_response(&mut stim.borrow_mut(), "GetStatus", &data);
+        if (data[0] >> 2) & 0x7 != 0 {
+            break;
+        }
+    }
 
     // SetPacketType(PACKET_TYPE_GFSK)
     let mut data = [0x8a, 0x00];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetPacketType", &data);
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetPacketType", &data);
 
     // SetRfFrequency(rfFrequency)
     let mut data = [0x86, 0xb8, 0x9d, 0x89]; // frequency = parameter * 203125 / 1024
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetRfFrequency", &data);
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetRfFrequency", &data);
 
     // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
     let mut data = [0x8f, 0x80, 0x00];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetBufferBaseAddress", &data);
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetBufferBaseAddress", &data);
 
     // TODO: good values?
     // SetModulationParams(...)
     let mut data = [0x8b, 0x04, 0x00, 0x00];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetModulationParams", &data);
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetModulationParams", &data);
 
     // SetPacketParams(...)
     let mut data = [0x8c, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x08];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetPacketParams", &data);
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetPacketParams", &data);
 
-    // TODO: this seems to fail
     // SetTxParams(power, ramptime)
-    let mut data = [0x83, 0x1f, 0xe0];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetTxParams", &data);
+    let mut data = [0x8e, 0x1f, 0xe0];
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetTxParams", &data);
 
-    // SetDioIrqParams(IrqMask,Dio1Mask,Dio2Mask,Dio3Mask)
+    // SetStandby(STDBY_RC)
+    let mut data = [0x80, 0x00];
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "SetStandby", &data);
+
+    // send
+
+    // // SetDioIrqParams(...)
+    // let mut data = [0x8d, 64, 65, 64, 65, 0, 0, 0, 0];
+    // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    // print_response(&mut stim.borrow_mut(), "SetDioIrqParams", &data);
 
     // // clear IRQ status. TODO: correct mask?
     // let mut data = [0x97, 0xff, 0xff];
-    // spi_radio_transmit(&dp, &mut delay, &mut data);
-    // iprintln!(stim, "response: {:?}", data);
+    // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    // iprintln!(&mut stim.borrow_mut(), "response: {:?}", data);
 
-    // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
-    let mut data = [0x83, 0x00, 0x00, 0x00];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "SetTx", &data);
+    // // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
+    // let mut data = [0x83, 0x00, 0x00, 0x00];
+    // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    // print_response(&mut stim.borrow_mut(), "SetTx", &data);
 
     // GetPacketStatus()
-    let mut data = [0x1D, 0, 0, 0, 0, 0, 0];
-    spi_radio_transmit(&dp, &mut delay, &mut data);
-    print_response(stim, "GetPacketStatus", &data);
+    let mut data = [0x1d, 0, 0, 0, 0, 0, 0];
+    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
+    // }
     loop {}
 
     loop {
         let address: u16 = 0x9ce;
         let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
-        spi_radio_transmit(&dp, &mut delay, &mut data);
+        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
         let data = &data[4..];
-        iprintln!(stim, "data: {:?}", data);
+        iprintln!(&mut stim.borrow_mut(), "data: {:?}", data);
     }
 
     // let mut prev = None;
@@ -576,8 +856,8 @@ fn main() -> ! {
     //         values[i] = accel.acceleration.0;
     //         times[i] = cortex_m::peripheral::DWT::cycle_count() / (HSI16_CLOCK_FREQUENCY / 1000000);
     //     }
-    //     iprintln!(stim, "{:?}", values);
-    //     iprintln!(stim, "{:?}", times);
+    //     iprintln!(&mut stim.borrow_mut(), "{:?}", values);
+    //     iprintln!(&mut stim.borrow_mut(), "{:?}", times);
     // }
 
     //
@@ -590,7 +870,7 @@ fn main() -> ! {
     //         prev = Some(x);
 
     //         if diff < min_diff {
-    //             iprintln!(stim, "{}", diff);
+    //             iprintln!(&mut stim.borrow_mut(), "{}", diff);
     //             min_diff = diff;
     //         }
     //     }
@@ -619,7 +899,7 @@ fn main() -> ! {
         //     &dp, 0, 0,
         //     (angle.abs() / 10) as u32,
         // );
-        // iprintln!(stim, "{}", angle as f32 / 45000.0);
+        // iprintln!(&mut stim.borrow_mut(), "{}", angle as f32 / 45000.0);
     }
 
     // led(&dp, 0, 10, 0);
