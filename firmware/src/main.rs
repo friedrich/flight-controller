@@ -828,6 +828,65 @@ fn radio<'a>(
     print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
 }
 
+fn accel<'a>(
+    dp: &'a pac::Peripherals,
+    delay: &'a RefCell<delay::Delay>,
+    stim: &'a RefCell<&'a mut itm::Stim>,
+) {
+    accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
+    accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
+
+    let mut v = (0.0, 0.0, 0.0);
+    let mut g = (0.0, 0.0, 0.0);
+
+    loop {
+        let data = read_accelerometer_data(&dp);
+        v.0 += f32::from(data.acceleration.0) / 10000.0;
+        v.1 += f32::from(data.acceleration.1) / 10000.0;
+        v.2 += f32::from(data.acceleration.2) / 10000.0;
+        let s = 0.000000014;
+        g.0 += f32::from(data.gyroscope.0) * s;
+        g.1 += f32::from(data.gyroscope.1) * s;
+        g.2 += f32::from(data.gyroscope.2) * s;
+
+        while g.0 < -0.5 {
+            g.0 += 1.0;
+        }
+        while g.1 < -0.5 {
+            g.1 += 1.0;
+        }
+        while g.2 < -0.5 {
+            g.2 += 1.0;
+        }
+        while g.0 >= 0.5 {
+            g.0 -= 1.0;
+        }
+        while g.1 >= 0.5 {
+            g.1 -= 1.0;
+        }
+        while g.2 >= 0.5 {
+            g.2 -= 1.0;
+        }
+
+        // iprintln!(&mut stim.borrow_mut(), "{:10.3} {:10.3} {:10.3}", v.0, v.1, v.2);
+        iprintln!(
+            &mut stim.borrow_mut(),
+            "{:10.3} {:10.3} {:10.3}",
+            g.0,
+            g.1,
+            g.2
+        );
+
+        let (a, b, c) = (g.0 * g.0, g.1 * g.1, g.2 * g.2);
+        led(
+            &dp,
+            (a * LED_COUNTER_PERIOD as f32) as u32,
+            (b * LED_COUNTER_PERIOD as f32) as u32,
+            (b * LED_COUNTER_PERIOD as f32) as u32,
+        );
+    }
+}
+
 #[entry]
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
@@ -848,81 +907,8 @@ fn main() -> ! {
         delay.borrow_mut().delay_ms(1);
     }
 
-    radio(&dp, &delay, &stim);
+    // radio(&dp, &delay, &stim);
+    accel(&dp, &delay, &stim);
 
-    accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
-    accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
-
-    // let mut prev = None;
-    let mut cycle = 0;
-    let mut min_diff = 1000000;
-
-    cp.DWT.enable_cycle_counter();
-    // cortex_m::peripheral::DWT::enable_cycle_counter(&mut cp.DWT);
-
-    // loop {
-    //     let mut values = [0; 10];
-    //     let mut times = [0; 10];
-
-    //     cp.DWT.set_cycle_count(0);
-    //     for i in 0..values.len() {
-    //         let accel = read_accelerometer_data(&dp);
-    //         values[i] = accel.acceleration.0;
-    //         times[i] = cortex_m::peripheral::DWT::cycle_count() / (HSI16_CLOCK_FREQUENCY / 1000000);
-    //     }
-    //     iprintln!(&mut stim.borrow_mut(), "{:?}", values);
-    //     iprintln!(&mut stim.borrow_mut(), "{:?}", times);
-    // }
-
-    //
-
-    //    match prev {
-    //     Some(p) if p != x => {
-    //         let new_cycle = cortex_m::peripheral::DWT::cycle_count();
-    //         let diff = new_cycle - cycle;
-    //         cycle = new_cycle;
-    //         prev = Some(x);
-
-    //         if diff < min_diff {
-    //             iprintln!(&mut stim.borrow_mut(), "{}", diff);
-    //             min_diff = diff;
-    //         }
-    //     }
-    //     None => {
-    //         prev = Some(x);
-    //     }
-    //     _ => {}
-    // }
-
-    // servos(&dp, 40, 40, 40);
-
-    let mut angle = 0;
-
-    loop {
-        let v = read_accelerometer_data(&dp).acceleration;
-        led(
-            &dp,
-            (v.0.abs() / 10) as u32,
-            (v.1.abs() / 10) as u32,
-            (v.2.abs() / 10) as u32,
-        );
-
-        // let v = read_accelerometer_data(&dp).gyroscope;
-        // angle += v.2;
-        // led(
-        //     &dp, 0, 0,
-        //     (angle.abs() / 10) as u32,
-        // );
-        // iprintln!(&mut stim.borrow_mut(), "{}", angle as f32 / 45000.0);
-    }
-
-    // led(&dp, 0, 10, 0);
-    // loop {
-    //     led(&dp, 0, 10, 0);
-    //     servos(&dp, 40, 40, 40);
-    //     for x in 0..100_000 { }
-    //     led(&dp, 0, 0, 10);
-    //     servos(&dp, 40, 60, 40);
-    //     for x in 0..100_000 { }
-    // }
+    loop {}
 }
