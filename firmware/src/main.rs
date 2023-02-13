@@ -3,13 +3,51 @@
 
 use panic_halt as _;
 
+use core::ptr;
+use cortex_m::delay;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::hprintln;
+use paste::paste;
 use stm32g4::stm32g4a1 as pac;
-use core::ptr;
+use stm32g4::stm32g4a1::{gpioa, gpiob};
 
-const INTERNAL_CLOCK_FREQUENCY: u32 = 16_000_000;
+const HSI16_CLOCK_FREQUENCY: u32 = 16_000_000;
+const AHB_CLOCK_FREQUENCY: u32 = HSI16_CLOCK_FREQUENCY;
 const LED_COUNTER_PERIOD: u32 = 16_000;
+
+macro_rules! pin_mode_input {
+    ($gpio:expr, $num:literal, $pull:expr) => {
+        paste! {
+            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().variant($pull));
+            $gpio.moder.modify(|_, w| w.[<moder $num>]().input());
+        }
+    };
+}
+
+macro_rules! pin_mode_output {
+    ($gpio:expr, $num:literal, $type:expr, $speed:expr, $state:expr) => {
+        paste! {
+            $gpio.ospeedr.modify(|_, w| w.[<ospeedr $num>]().variant($speed));
+            $gpio.otyper.modify(|_, w| w.[<ot $num>]().variant($type));
+            $gpio.odr.modify(|_, w| w.[<odr $num>]().bit($state));
+            $gpio.moder.modify(|_, w| w.[<moder $num>]().output());
+            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().floating());
+        }
+    };
+}
+
+macro_rules! pin_mode_alternate {
+    ($gpio:expr, $num:literal, $type:expr, $pull:expr, $speed:expr, $alt:expr) => {
+        paste! {
+            $gpio.afrl.modify(|_, w| w.[<afrl $num>]().variant($alt));
+            // $gpio.afrh.modify(|_, w| w.[<afrh $num>]().variant($alt));
+            $gpio.ospeedr.modify(|_, w| w.[<ospeedr $num>]().variant($speed));
+            $gpio.otyper.modify(|_, w| w.[<ot $num>]().variant($type));
+            $gpio.moder.modify(|_, w| w.[<moder $num>]().alternate());
+            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().variant($pull));
+        }
+    };
+}
 
 fn init_led(p: &pac::Peripherals) {
     // enable IO port B clock
@@ -42,7 +80,7 @@ fn init_led(p: &pac::Peripherals) {
 
     const FREQUENCY: u32 = 1_000;
     const COUNTER_FREQUENCY: u32 = FREQUENCY * LED_COUNTER_PERIOD;
-    const PRESCALER_PERIOD: u16 = (INTERNAL_CLOCK_FREQUENCY / COUNTER_FREQUENCY) as u16; // TODO: reverse calculation, since the rounding error can be big
+    const PRESCALER_PERIOD: u16 = (HSI16_CLOCK_FREQUENCY / COUNTER_FREQUENCY) as u16; // TODO: reverse calculation, since the rounding error can be big
 
     // set prescaler period
     p.TIM3.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1));
@@ -74,11 +112,11 @@ fn init_led(p: &pac::Peripherals) {
     p.TIM3.cr1.modify(|_, w| w.cen().set_bit());
 }
 
-fn led(p: &pac::Peripherals, red: u16, green: u16, blue: u16) {
+fn led(p: &pac::Peripherals, red: u32, green: u32, blue: u32) {
     // set duty cycle
-    p.TIM3.ccr1().modify(|_, w| w.ccr().variant(u32::from(red)));
-    p.TIM3.ccr2().modify(|_, w| w.ccr().variant(u32::from(green)));
-    p.TIM3.ccr4().modify(|_, w| w.ccr().variant(u32::from(blue)));
+    p.TIM3.ccr1().modify(|_, w| w.ccr().variant(red));
+    p.TIM3.ccr2().modify(|_, w| w.ccr().variant(green));
+    p.TIM3.ccr4().modify(|_, w| w.ccr().variant(blue));
 }
 
 // main motor: PB6 - AF1: TIM16_CH1N, AF2: TIM4_CH1, AF5: TIM8_CH1
@@ -100,7 +138,7 @@ fn servos(p: &pac::Peripherals, left_percent: u8, right_percent: u8, back_percen
     p.GPIOA.pupdr.modify(|_, w| w.pupdr12().floating());
 
     // set alternate function
-    p.GPIOA.afrl.modify(|_, w| w.afrl2().af1());   // AF1:  TIM2_CH3, AF9: TIM15_CH1
+    p.GPIOA.afrl.modify(|_, w| w.afrl2().af1()); // AF1:  TIM2_CH3, AF9: TIM15_CH1
     p.GPIOA.afrh.modify(|_, w| w.afrh11().af10()); // AF10: TIM4_CH1, AF11: TIM1_CH4, AF6: TIM1_CH1N
     p.GPIOA.afrh.modify(|_, w| w.afrh12().af10()); // AF10: TIM4_CH2, AF6: TIM1_CH2N, AF1: TIM16_CH1
 
@@ -120,7 +158,7 @@ fn servos(p: &pac::Peripherals, left_percent: u8, right_percent: u8, back_percen
     const COUNTER_PERIOD: u32 = 100;
     const FREQUENCY: u32 = 450;
     const COUNTER_FREQUENCY: u32 = FREQUENCY * COUNTER_PERIOD;
-    const PRESCALER_PERIOD: u16 = (INTERNAL_CLOCK_FREQUENCY / COUNTER_FREQUENCY) as u16;
+    const PRESCALER_PERIOD: u16 = (HSI16_CLOCK_FREQUENCY / COUNTER_FREQUENCY) as u16;
 
     // set prescaler period
     p.TIM2.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1));
@@ -133,9 +171,12 @@ fn servos(p: &pac::Peripherals, left_percent: u8, right_percent: u8, back_percen
     const MIN_DUTY_PERCENT: u32 = 50; // measured: 49%
     const MAX_DUTY_PERCENT: u32 = 90; // measured: 87%
 
-    let left_duty_percent = u32::from(left_percent) * (MAX_DUTY_PERCENT - MIN_DUTY_PERCENT) / 100 + MIN_DUTY_PERCENT;
-    let right_duty_percent = u32::from(right_percent) * (MAX_DUTY_PERCENT - MIN_DUTY_PERCENT) / 100 + MIN_DUTY_PERCENT;
-    let back_duty_percent = u32::from(back_percent) * (MAX_DUTY_PERCENT - MIN_DUTY_PERCENT) / 100 + MIN_DUTY_PERCENT;
+    let left_duty_percent =
+        u32::from(left_percent) * (MAX_DUTY_PERCENT - MIN_DUTY_PERCENT) / 100 + MIN_DUTY_PERCENT;
+    let right_duty_percent =
+        u32::from(right_percent) * (MAX_DUTY_PERCENT - MIN_DUTY_PERCENT) / 100 + MIN_DUTY_PERCENT;
+    let back_duty_percent =
+        u32::from(back_percent) * (MAX_DUTY_PERCENT - MIN_DUTY_PERCENT) / 100 + MIN_DUTY_PERCENT;
 
     // set duty cycle
     p.TIM2.ccr3().modify(|_, w| w.ccr().variant(left_duty_percent * COUNTER_PERIOD / 100));
@@ -170,118 +211,141 @@ fn servos(p: &pac::Peripherals, left_percent: u8, right_percent: u8, back_percen
 // PA6: CONTROLLER_SDI
 // PA7: CONTROLLER_SDO
 
-fn init_spi(p: &pac::Peripherals) {
-    // enable IO port A clock
-    p.RCC.ahb2enr.modify(|_, w| w.gpioaen().enabled());
+// fn init_clocks(dp: &pac::Peripherals, delay: &mut delay::Delay) {
+//     // enable IO port clocks
+//     dp.RCC.ahb2enr.modify(|_, w| w.gpioaen().enabled());
+//     dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
 
-    // enable SPI1 clock
-    p.RCC.apb2enr.modify(|_, w| w.spi1en().enabled());
+//     // enable timer clocks
+//     dp.RCC.apb1enr1.modify(|_, w| w.tim2en().enabled());
+//     dp.RCC.apb1enr1.modify(|_, w| w.tim3en().enabled());
+//     dp.RCC.apb1enr1.modify(|_, w| w.tim4en().enabled());
+// }
 
-    // TODO: wait for the clock to become active?
-
-    // 1. Write proper GPIO registers: Configure GPIO for MOSI, MISO and SCK pins.
-
-    // disable pull-up and pull-down resistors
-    p.GPIOA.pupdr.modify(|_, w| w.pupdr5().floating());
-    p.GPIOA.pupdr.modify(|_, w| w.pupdr6().floating());
-    p.GPIOA.pupdr.modify(|_, w| w.pupdr7().floating());
-
-    // set push pull output type
-    p.GPIOA.otyper.modify(|_, w| w.ot5().push_pull());
-    p.GPIOA.otyper.modify(|_, w| w.ot6().push_pull());
-    p.GPIOA.otyper.modify(|_, w| w.ot7().push_pull());
-
-    // set very high speed
-    p.GPIOA.ospeedr.modify(|_, w| w.ospeedr5().very_high_speed());
-    p.GPIOA.ospeedr.modify(|_, w| w.ospeedr6().very_high_speed());
-    p.GPIOA.ospeedr.modify(|_, w| w.ospeedr7().very_high_speed());
-
-    // set alternate mode
-    p.GPIOA.moder.modify(|_, w| w.moder5().alternate());
-    p.GPIOA.moder.modify(|_, w| w.moder6().alternate());
-    p.GPIOA.moder.modify(|_, w| w.moder7().alternate());
-
-    // set alternate function
-    p.GPIOA.afrl.modify(|_, w| w.afrl5().af5()); // SPI1_SCK
-    p.GPIOA.afrl.modify(|_, w| w.afrl6().af5()); // SPI1_MISO
-    p.GPIOA.afrl.modify(|_, w| w.afrl7().af5()); // SPI1_MOSI
-
-    // 2. Write to the SPI_CR1 register:
-
-    p.SPI1.cr1.modify(|_, w| w.br().variant(0b111)); // slow baut rate
-    p.SPI1.cr1.modify(|_, w| w.cpol().set_bit()); // clock is high when idle
-    p.SPI1.cr1.modify(|_, w| w.cpha().set_bit()); // the second clock transition is the first data capture edge
-    p.SPI1.cr1.modify(|_, w| w.rxonly().clear_bit().bidimode().clear_bit()); // full duplex mode
-    p.SPI1.cr1.modify(|_, w| w.lsbfirst().clear_bit()); // MSB first
-    p.SPI1.cr1.modify(|_, w| w.ssm().set_bit()); // software chip select management
-    p.SPI1.cr1.modify(|_, w| w.ssi().set_bit()); // enable internal chip select
-    p.SPI1.cr1.modify(|_, w| w.mstr().set_bit()); // master configuration
-
-    // 3. Write to SPI_CR2 register:
-
-    // p.SPI1.cr2.modify(|_, w| w.ds().variant(0b1111)); // 16 bit data size
-    p.SPI1.cr2.modify(|_, w| w.ds().variant(0b0111)); // 8 bit data size
-    p.SPI1.cr2.modify(|_, w| w.ssoe().clear_bit()); // disable chip select output
-    // p.SPI1.cr2.modify(|_, w| w.frxth().clear_bit()); // RXNE event is generated if the FIFO level is greater than or equal to 1/2 (16-bit)
-    p.SPI1.cr2.modify(|_, w| w.frxth().set_bit()); // RXNE event is generated if the FIFO level is greater than or equal to 1/4 (8-bit)
-
-    // enable SPI
-    p.SPI1.cr1.modify(|_, w| w.spe().set_bit());
-    
-    // ACCEL CS - TODO: switch to hardware select
-
-    // disable pull-up and pull-down resistors
-    p.GPIOA.pupdr.modify(|_, w| w.pupdr4().floating());
-
-    // set state
-    p.GPIOA.odr.modify(|_, w| w.odr4().high());
-
-    // set output mode
-    p.GPIOA.moder.modify(|_, w| w.moder4().output());
+fn blub() {
+    // The debug pins are in AF pull-up/pull-down after reset:
+    // - PA15: JTDI in pull-up
+    // - PA14: JTCK/SWCLK in pull-down
+    // - PA13: JTMS/SWDAT in pull-up
+    // - PB4: NJTRST in pull-up
+    // - PB3: JTDO in floating state no pull-up/pull-down
+    // PB8/BOOT0 is in input mode during the reset until at least the end of the option byte loading phase. See Section 9.3.15: Using PB8 as GPIO.
 }
 
-fn accel_read_multiple(p: &pac::Peripherals, address: u8, data: &mut [u8]) {
-    p.GPIOA.odr.modify(|_, w| w.odr4().low());
-    // TODO: delay? (5 ns needed before clock goes low)
+fn init_spi(dp: &pac::Peripherals) {
+    use gpioa::afrl::AFRL0_A::Af5;
+    use gpioa::ospeedr::OSPEEDR0_A::VeryHighSpeed as AVeryHighSpeed;
+    use gpioa::otyper::OT0_A::PushPull as APushPull;
+    use gpioa::pupdr::PUPDR0_A::Floating as AFloating;
+    use gpiob::ospeedr::OSPEEDR0_A::VeryHighSpeed as BVeryHighSpeed;
+    use gpiob::otyper::OT0_A::PushPull as BPushPull;
+
+    // enable clocks
+    dp.RCC.apb2enr.modify(|_, w| w.spi1en().enabled());
+    dp.RCC.ahb2enr.modify(|_, w| w.gpioaen().enabled());
+    dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
+
+    // configure CS pins
+    pin_mode_output!(dp.GPIOA, 3, APushPull, AVeryHighSpeed, true);
+    pin_mode_output!(dp.GPIOA, 4, APushPull, AVeryHighSpeed, true);
+    pin_mode_output!(dp.GPIOB, 0, BPushPull, BVeryHighSpeed, true);
+
+    // configure SPI pins
+    pin_mode_alternate!(dp.GPIOA, 5, APushPull, AFloating, AVeryHighSpeed, Af5);
+    pin_mode_alternate!(dp.GPIOA, 6, APushPull, AFloating, AVeryHighSpeed, Af5);
+    pin_mode_alternate!(dp.GPIOA, 7, APushPull, AFloating, AVeryHighSpeed, Af5);
+
+    // configure SPI
+    dp.SPI1.cr1.modify(|_, w| w.rxonly().clear_bit().bidimode().clear_bit()); // full duplex mode
+    dp.SPI1.cr1.modify(|_, w| w.lsbfirst().clear_bit()); // MSB first
+    dp.SPI1.cr1.modify(|_, w| w.ssm().set_bit()); // software chip select management
+    dp.SPI1.cr1.modify(|_, w| w.ssi().set_bit()); // enable internal chip select
+    dp.SPI1.cr1.modify(|_, w| w.mstr().set_bit()); // act as controller
+    dp.SPI1.cr2.modify(|_, w| w.ds().variant(0b0111)); // 8 bit data size
+    dp.SPI1.cr2.modify(|_, w| w.ssoe().clear_bit()); // disable chip select output
+    dp.SPI1.cr2.modify(|_, w| w.frxth().set_bit()); // RXNE event is generated if the FIFO level is greater than or equal to 1/4 (8-bit)
+}
+
+// baud rate = f_PCLK / 2^(baud_rate_setting+1)
+// baud_rate_setting <= 7
+fn enable_spi(dp: &pac::Peripherals, baud_rate_setting: u8, cpol: bool, cpha: bool) {
+    // configure SPI
+    dp.SPI1.cr1.modify(|_, w| w.br().variant(baud_rate_setting));
+    dp.SPI1.cr1.modify(|_, w| w.cpol().bit(cpol));
+    dp.SPI1.cr1.modify(|_, w| w.cpha().bit(cpha));
+
+    // enable SPI
+    dp.SPI1.cr1.modify(|_, w| w.spe().set_bit());
+}
+
+fn disable_spi(dp: &pac::Peripherals) {
+    while dp.SPI1.sr.read().ftlvl() != 0 {}
+    while dp.SPI1.sr.read().bsy().bit_is_set() {}
+    dp.SPI1.cr1.modify(|_, w| w.spe().clear_bit());
+    while dp.SPI1.sr.read().frlvl() != 0 {
+        // TODO: read data
+    }
+}
+
+const SPI_FREQUENCY_SETTING_ACCEL: u8 = 0;
+
+fn accel_read_multiple(dp: &pac::Peripherals, address: u8, data: &mut [u8]) {
+    enable_spi(dp, SPI_FREQUENCY_SETTING_ACCEL, true, true); // max 10 MHz for accelerometer
+
+    dp.GPIOA.odr.modify(|_, w| w.odr4().low());
+
+    // 5 ns needed before clock goes low - TODO: make this nicer
+    cortex_m::asm::nop();
 
     // need to read and write single bytes
-    let dr = p.SPI1.dr.as_ptr() as *mut u8;
+    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
 
     unsafe { ptr::write_volatile(dr, 1 << 7 | address) };
-    while !p.SPI1.sr.read().rxne().bit() {}
+    while dp.SPI1.sr.read().frlvl() == 0 {}
     unsafe { ptr::read_volatile(dr) };
 
     for x in data {
         unsafe { ptr::write_volatile(dr, 0) };
-        while !p.SPI1.sr.read().rxne().bit() {}
+        while dp.SPI1.sr.read().frlvl() == 0 {}
         *x = unsafe { ptr::read_volatile(dr) };
     }
 
-    // TODO: delay? (20 ns needed after clock goes high)
-    p.GPIOA.odr.modify(|_, w| w.odr4().high());
+    // 20 ns needed before clock goes high - TODO: make this nicer
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+    cortex_m::asm::nop();
+
+    dp.GPIOA.odr.modify(|_, w| w.odr4().high());
+
+    disable_spi(dp);
 }
 
-fn accel_write_multiple(p: &pac::Peripherals, address: u8, data: &[u8]) {
-    p.GPIOA.odr.modify(|_, w| w.odr4().low());
+fn accel_write_multiple(dp: &pac::Peripherals, address: u8, data: &[u8]) {
+    enable_spi(dp, SPI_FREQUENCY_SETTING_ACCEL, true, true); // max 10 MHz for accelerometer
+
+    dp.GPIOA.odr.modify(|_, w| w.odr4().low());
     // TODO: delay? (5 ns needed before clock goes low)
 
     // need to read and write single bytes
-    let dr = p.SPI1.dr.as_ptr() as *mut u8;
+    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
 
     unsafe { ptr::write_volatile(dr, address) };
 
     for x in data {
-        while !p.SPI1.sr.read().txe().bit() {}
+        while !dp.SPI1.sr.read().txe().bit() {}
         unsafe { ptr::write_volatile(dr, *x) };
     }
 
-    while p.SPI1.sr.read().bsy().bit() {}
-    while p.SPI1.sr.read().rxne().bit() {
+    while dp.SPI1.sr.read().bsy().bit() {}
+    while dp.SPI1.sr.read().frlvl() != 0 {
         unsafe { ptr::read_volatile(dr) };
     }
 
     // TODO: delay? (20 ns needed after clock goes high)
-    p.GPIOA.odr.modify(|_, w| w.odr4().high());
+    dp.GPIOA.odr.modify(|_, w| w.odr4().high());
+
+    disable_spi(dp);
 }
 
 fn accel_read(p: &pac::Peripherals, address: u8) -> u8 {
@@ -295,45 +359,110 @@ fn accel_write(p: &pac::Peripherals, address: u8, data: u8) {
     accel_write_multiple(p, address, &data);
 }
 
+struct AccelerometerData {
+    acceleration: (i16, i16, i16),
+    gyroscope: (i16, i16, i16),
+}
+
+fn read_accelerometer_data(dp: &pac::Peripherals) -> AccelerometerData {
+    let mut data = [0; 12];
+
+    accel_read_multiple(&dp, 0x22, &mut data);
+
+    let gx = (u16::from(data[1]) << 8 | u16::from(data[0])) as i16;
+    let gy = (u16::from(data[3]) << 8 | u16::from(data[2])) as i16;
+    let gz = (u16::from(data[5]) << 8 | u16::from(data[4])) as i16;
+    let ax = (u16::from(data[7]) << 8 | u16::from(data[6])) as i16;
+    let ay = (u16::from(data[9]) << 8 | u16::from(data[8])) as i16;
+    let az = (u16::from(data[11]) << 8 | u16::from(data[10])) as i16;
+
+    AccelerometerData {
+        acceleration: (ax, ay, az),
+        gyroscope: (gx, gy, gz),
+    }
+}
+
 #[entry]
 fn main() -> ! {
-    let cp = cortex_m::Peripherals::take().unwrap();
+    let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
-    let mut delay = cortex_m::delay::Delay::new(cp.SYST, 16_000_000); // TODO: is this frequency exposed in some library?
+    let mut delay = cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY);
 
     init_led(&dp);
-    led(&dp, 8000, 0, 0);
+    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
 
     init_spi(&dp);
 
-    // let mut a = [0, 0, 0];
-    // loop {
-    //     accel_read_multiple(&dp, 0x0e, &mut a);
-    //     // hprintln!("{:?}", a);
-    //     // while p.SPI1.sr.read().bsy().bit() {}
-
-    //     // for x in 0..10_000 { }
-    // }
-
-    delay.delay_us(200); // needs to be about 100us for the accelerometer to respond properly
-
-    if accel_read(&dp, 0x0f) != 0x6b {
-        panic!("invalid response from accelerometer");
+    // wait for accelerometer to become available
+    while accel_read(&dp, 0x0f) != 0x6b {
+        delay.delay_ms(1);
     }
 
-    // The accelerometer is activated from power-down by writing ODR_XL[3:0] in CTRL1_XL (10h) while the gyroscope is activated from power-down by writing ODR_G[3:0] in CTRL2_G (11h). For combo-mode the ODRs are totally independent.
     accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
     accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
 
-    servos(&dp, 40, 40, 40);
-    led(&dp, 0, 10, 0);
+    // let mut prev = None;
+    let mut cycle = 0;
+    let mut min_diff = 1000000;
+
+    cp.DWT.enable_cycle_counter();
+    // cortex_m::peripheral::DWT::enable_cycle_counter(&mut cp.DWT);
+
+    // loop {
+    //     let mut values = [0; 10];
+    //     let mut times = [0; 10];
+
+    //     cp.DWT.set_cycle_count(0);
+    //     for i in 0..values.len() {
+    //         let accel = read_accelerometer_data(&dp);
+    //         values[i] = accel.acceleration.0;
+    //         times[i] = cortex_m::peripheral::DWT::cycle_count() / (HSI16_CLOCK_FREQUENCY / 1000000);
+    //     }
+    //     hprintln!("{:?}", values);
+    //     hprintln!("{:?}", times);
+    // }
+
+    //
+
+    //    match prev {
+    //     Some(p) if p != x => {
+    //         let new_cycle = cortex_m::peripheral::DWT::cycle_count();
+    //         let diff = new_cycle - cycle;
+    //         cycle = new_cycle;
+    //         prev = Some(x);
+
+    //         if diff < min_diff {
+    //             hprintln!("{}", diff);
+    //             min_diff = diff;
+    //         }
+    //     }
+    //     None => {
+    //         prev = Some(x);
+    //     }
+    //     _ => {}
+    // }
+
+    // servos(&dp, 40, 40, 40);
+
+    let mut angle = 0;
 
     loop {
-        let x = (u16::from(accel_read(&dp, 0x29)) << 8 | u16::from(accel_read(&dp, 0x28))) as i16; // x
-        let y = (u16::from(accel_read(&dp, 0x2b)) << 8 | u16::from(accel_read(&dp, 0x2a))) as i16; // y
-        let z = (u16::from(accel_read(&dp, 0x2d)) << 8 | u16::from(accel_read(&dp, 0x2c))) as i16; // z
-        led(&dp, (x.abs() / 10) as u16, (y.abs() / 10) as u16, (z.abs() / 10) as u16);
+        let v = read_accelerometer_data(&dp).acceleration;
+        led(
+            &dp,
+            (v.0.abs() / 10) as u32,
+            (v.1.abs() / 10) as u32,
+            (v.2.abs() / 10) as u32,
+        );
+
+        // let v = read_accelerometer_data(&dp).gyroscope;
+        // angle += v.2;
+        // led(
+        //     &dp, 0, 0,
+        //     (angle.abs() / 10) as u32,
+        // );
+        // hprintln!("{}", angle as f32 / 45000.0);
     }
 
     // led(&dp, 0, 10, 0);
