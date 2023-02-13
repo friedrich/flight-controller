@@ -53,67 +53,54 @@ macro_rules! pin_mode_alternate {
     };
 }
 
-fn init_led(p: &pac::Peripherals) {
+fn init_led(dp: &pac::Peripherals) {
+    use gpiob::ospeedr::OSPEEDR0_A::LowSpeed;
+    use gpiob::otyper::OT0_A::OpenDrain;
+    use gpiob::pupdr::PUPDR0_A::Floating;
+    use gpiob::afrl::AFRL0_A::{Af2, Af10};
+
     // enable IO port B clock
-    p.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
+    dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
 
     // enable TIM3 timer clock
-    p.RCC.apb1enr1.modify(|_, w| w.tim3en().enabled());
+    dp.RCC.apb1enr1.modify(|_, w| w.tim3en().enabled());
 
-    // TODO: wait for the clock to become active?
-
-    // set open drain output type
-    p.GPIOB.otyper.modify(|_, w| w.ot4().open_drain());
-    p.GPIOB.otyper.modify(|_, w| w.ot5().open_drain());
-    p.GPIOB.otyper.modify(|_, w| w.ot7().open_drain());
-
-    // disable pull-up and pull-down resistors
-    p.GPIOB.pupdr.modify(|_, w| w.pupdr4().floating());
-    p.GPIOB.pupdr.modify(|_, w| w.pupdr5().floating());
-    p.GPIOB.pupdr.modify(|_, w| w.pupdr7().floating());
-
-    // set alternate function
-    p.GPIOB.afrl.modify(|_, w| w.afrl4().af2()); // TIM3_CH1
-    p.GPIOB.afrl.modify(|_, w| w.afrl5().af2()); // TIM3_CH2
-    p.GPIOB.afrl.modify(|_, w| w.afrl7().af10()); // TIM3_CH4
-
-    // set alternate mode
-    p.GPIOB.moder.modify(|_, w| w.moder4().alternate());
-    p.GPIOB.moder.modify(|_, w| w.moder5().alternate());
-    p.GPIOB.moder.modify(|_, w| w.moder7().alternate());
+    pin_mode_alternate!(dp.GPIOB, 4, OpenDrain, Floating, LowSpeed, Af2);
+    pin_mode_alternate!(dp.GPIOB, 5, OpenDrain, Floating, LowSpeed, Af2);
+    pin_mode_alternate!(dp.GPIOB, 7, OpenDrain, Floating, LowSpeed, Af10);
 
     const FREQUENCY: u32 = 1_000;
     const COUNTER_FREQUENCY: u32 = FREQUENCY * LED_COUNTER_PERIOD;
     const PRESCALER_PERIOD: u16 = (HSI16_CLOCK_FREQUENCY / COUNTER_FREQUENCY) as u16; // TODO: reverse calculation, since the rounding error can be big
 
     // set prescaler period
-    p.TIM3.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1));
+    dp.TIM3.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1));
 
     // set counter period
-    p.TIM3.arr.modify(|_, w| w.arr().variant(LED_COUNTER_PERIOD - 1));
+    dp.TIM3.arr.modify(|_, w| w.arr().variant(LED_COUNTER_PERIOD - 1));
 
     // set duty cycle
-    p.TIM3.ccr1().modify(|_, w| w.ccr().variant(0));
-    p.TIM3.ccr2().modify(|_, w| w.ccr().variant(0));
-    p.TIM3.ccr4().modify(|_, w| w.ccr().variant(0));
+    dp.TIM3.ccr1().modify(|_, w| w.ccr().variant(0));
+    dp.TIM3.ccr2().modify(|_, w| w.ccr().variant(0));
+    dp.TIM3.ccr4().modify(|_, w| w.ccr().variant(0));
 
     // set PWM mode 1
-    p.TIM3.ccmr1_output().modify(|_, w| w.oc1m().bits(0b110));
-    p.TIM3.ccmr1_output().modify(|_, w| w.oc2m().bits(0b110));
-    p.TIM3.ccmr2_output().modify(|_, w| w.oc4m().bits(0b110));
+    dp.TIM3.ccmr1_output().modify(|_, w| w.oc1m().bits(0b110));
+    dp.TIM3.ccmr1_output().modify(|_, w| w.oc2m().bits(0b110));
+    dp.TIM3.ccmr2_output().modify(|_, w| w.oc4m().bits(0b110));
 
     // select active low polarity
-    p.TIM3.ccer.modify(|_, w| w.cc1p().set_bit());
-    p.TIM3.ccer.modify(|_, w| w.cc2p().set_bit());
-    p.TIM3.ccer.modify(|_, w| w.cc4p().set_bit());
+    dp.TIM3.ccer.modify(|_, w| w.cc1p().set_bit());
+    dp.TIM3.ccer.modify(|_, w| w.cc2p().set_bit());
+    dp.TIM3.ccer.modify(|_, w| w.cc4p().set_bit());
 
     // enable output
-    p.TIM3.ccer.modify(|_, w| w.cc1e().set_bit());
-    p.TIM3.ccer.modify(|_, w| w.cc2e().set_bit());
-    p.TIM3.ccer.modify(|_, w| w.cc4e().set_bit());
+    dp.TIM3.ccer.modify(|_, w| w.cc1e().set_bit());
+    dp.TIM3.ccer.modify(|_, w| w.cc2e().set_bit());
+    dp.TIM3.ccer.modify(|_, w| w.cc4e().set_bit());
 
     // enable counter
-    p.TIM3.cr1.modify(|_, w| w.cen().set_bit());
+    dp.TIM3.cr1.modify(|_, w| w.cen().set_bit());
 }
 
 fn led(p: &pac::Peripherals, red: u32, green: u32, blue: u32) {
