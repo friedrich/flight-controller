@@ -8,7 +8,7 @@ use cortex_m::peripheral::itm;
 use cortex_m::{iprint, iprintln};
 use cortex_m_rt::entry;
 use embedded_hal::digital::PinState;
-use panic_halt as _;
+use panic_itm as _;
 use paste::paste;
 use radio::Transmit;
 use radio_sx128x::base::Hal;

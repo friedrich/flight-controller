@@ -9,7 +9,7 @@ version = "0.1.0"
 cortex-m = "0.7.7"
 cortex-m-rt = "0.7.2"
 cortex-m-semihosting = "0.5.0"
-panic-halt = "0.2.0"
+panic-itm = "0.4.2"
 stm32g4 = { version = "0.15.1", features = ["stm32g4a1"] }
 paste = "1.0.11"
 # radio-sx128x = { git = "https://github.com/rust-iot/rust-radio-sx128x.git", ref = "61fa993", default-features = false }
