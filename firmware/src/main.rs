@@ -5,6 +5,8 @@ use panic_halt as _;
 
 use core::ptr;
 use cortex_m::delay;
+use cortex_m::iprintln;
+use cortex_m::peripheral::itm;
 use cortex_m_rt::entry;
 use cortex_m_semihosting::hprintln;
 use paste::paste;
@@ -397,6 +399,53 @@ fn spi_radio_transmit(dp: &pac::Peripherals, delay: &mut delay::Delay, data: &mu
     disable_spi(dp);
 }
 
+fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
+    iprintln!(stim, "{}:", label);
+    for x in data {
+        let circuit = x >> 5;
+        let status = (x >> 2) & 0x7;
+        iprintln!(stim, "{:x} {:x}", circuit, status);
+    }
+}
+
+// fn bluetooth() {
+
+//     // SetStandby(STDBY_RC)
+//     let mut data = [0x80, 0];
+//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     print_response(stim, "SetStandby", &data);
+
+//     // SetPacketType(PACKET_TYPE_BLE)
+//     let mut data = [0x8a, 0x04];
+//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     print_response(stim, "SetPacketType", &data);
+
+//     // SetRfFrequency(rfFrequency)
+//     let mut data = [0x86, 0xB8, 0x9D, 0x89]; // TODO: this frequency is probably incorrect
+//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     print_response(stim, "SetRfFrequency", &data);
+
+//     // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
+//     let mut data = [0x8F, 0x80, 0x00];
+//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     print_response(stim, "SetBufferBaseAddress", &data);
+
+//     // SetModulationParams(BLE_BR_1_000_BW_1_2, MOD_IND_0_5, BT_0_5)
+//     let mut data = [0x8B, 0x45, 0x01, 0x20];
+//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     print_response(stim, "SetModulationParams", &data);
+
+//     // SetPacketParams(packetParam[0], packetParam[1], packetParam[2], packetParam[3])
+//     // Although this command can accept up to 7 arguments, in BLE mode SetPacketParams can accept only 4. However the 3 remaining arguments must be set to 0 and sent to the radio.
+//     let mut data = [0x8C, ...];
+//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     print_response(stim, "SetPacketParams", &data);
+
+//     // ....
+// }
+
+struct RadioHal {}
+
 #[entry]
 fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
@@ -410,6 +459,7 @@ fn main() -> ! {
     led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
 
     init_spi(&dp);
+    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 2, 0);
 
     // wait for accelerometer to become available
     while accel_read(&dp, 0x0f) != 0x6b {
@@ -424,18 +474,89 @@ fn main() -> ! {
         let address: u16 = 0x9ce;
         let mut data = [0x18, (address >> 8) as u8, address as u8, 1, 2, 3, 4, 5];
         spi_radio_transmit(&dp, &mut delay, &mut data);
-        // hprintln!("status: {:?}", &data);
+        // iprintln!(stim, "status: {:?}", &data);
 
         let address: u16 = 0x9ce;
         let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
         spi_radio_transmit(&dp, &mut delay, &mut data);
         let data = &data[4..];
-        // hprintln!("data: {:?}", data);
+        // iprintln!(stim, "data: {:?}", data);
         if data == [1, 2, 3, 4, 5] {
             break;
         }
 
         delay.delay_ms(10); // not necessary
+    }
+
+    led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
+
+    // TODO: ??????
+    // To perform the calibration the Calibrate( calibParam ) function, opcode 0x89, must be used with the calibration parameters configured as follows:
+    // calibParam.ADCBulkPEnable = 1; calibParam.ADCBulkNEnable = 1; calibParam.ADCPulseEnable = 1; calibParam.PLLEnable = 1; calibParam.RC13MEnable = 1; calibParam.RC64KEnable = 1;
+    // Then we call the calibration function:
+    // Radio.Calibrate( calibParam );
+
+    // SetStandby(STDBY_RC)
+    let mut data = [0x80, 0x00];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetStandby", &data);
+
+    // SetPacketType(PACKET_TYPE_GFSK)
+    let mut data = [0x8a, 0x00];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetPacketType", &data);
+
+    // SetRfFrequency(rfFrequency)
+    let mut data = [0x86, 0xb8, 0x9d, 0x89]; // frequency = parameter * 203125 / 1024
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetRfFrequency", &data);
+
+    // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
+    let mut data = [0x8f, 0x80, 0x00];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetBufferBaseAddress", &data);
+
+    // TODO: good values?
+    // SetModulationParams(...)
+    let mut data = [0x8b, 0x04, 0x00, 0x00];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetModulationParams", &data);
+
+    // SetPacketParams(...)
+    let mut data = [0x8c, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x08];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetPacketParams", &data);
+
+    // TODO: this seems to fail
+    // SetTxParams(power, ramptime)
+    let mut data = [0x83, 0x1f, 0xe0];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetTxParams", &data);
+
+    // SetDioIrqParams(IrqMask,Dio1Mask,Dio2Mask,Dio3Mask)
+
+    // // clear IRQ status. TODO: correct mask?
+    // let mut data = [0x97, 0xff, 0xff];
+    // spi_radio_transmit(&dp, &mut delay, &mut data);
+    // iprintln!(stim, "response: {:?}", data);
+
+    // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
+    let mut data = [0x83, 0x00, 0x00, 0x00];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "SetTx", &data);
+
+    // GetPacketStatus()
+    let mut data = [0x1D, 0, 0, 0, 0, 0, 0];
+    spi_radio_transmit(&dp, &mut delay, &mut data);
+    print_response(stim, "GetPacketStatus", &data);
+    loop {}
+
+    loop {
+        let address: u16 = 0x9ce;
+        let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
+        spi_radio_transmit(&dp, &mut delay, &mut data);
+        let data = &data[4..];
+        iprintln!(stim, "data: {:?}", data);
     }
 
     // let mut prev = None;
@@ -455,8 +576,8 @@ fn main() -> ! {
     //         values[i] = accel.acceleration.0;
     //         times[i] = cortex_m::peripheral::DWT::cycle_count() / (HSI16_CLOCK_FREQUENCY / 1000000);
     //     }
-    //     hprintln!("{:?}", values);
-    //     hprintln!("{:?}", times);
+    //     iprintln!(stim, "{:?}", values);
+    //     iprintln!(stim, "{:?}", times);
     // }
 
     //
@@ -469,7 +590,7 @@ fn main() -> ! {
     //         prev = Some(x);
 
     //         if diff < min_diff {
-    //             hprintln!("{}", diff);
+    //             iprintln!(stim, "{}", diff);
     //             min_diff = diff;
     //         }
     //     }
@@ -498,7 +619,7 @@ fn main() -> ! {
         //     &dp, 0, 0,
         //     (angle.abs() / 10) as u32,
         // );
-        // hprintln!("{}", angle as f32 / 45000.0);
+        // iprintln!(stim, "{}", angle as f32 / 45000.0);
     }
 
     // led(&dp, 0, 10, 0);
