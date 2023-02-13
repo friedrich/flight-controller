@@ -402,6 +402,8 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
+    let stim = &mut cp.ITM.stim[0];
+
     let mut delay = cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY);
 
     init_led(&dp);
