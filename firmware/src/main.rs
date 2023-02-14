@@ -438,6 +438,40 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
 //     // ....
 // }
 
+#[derive(Debug)]
+enum UbxEncodeError {
+    BufferTooSmall,
+}
+
+fn ubx_encode<'a>(
+    message_class: u8,
+    message_id: u8,
+    payload: &[u8],
+    buffer: &'a mut [u8],
+) -> Result<&'a [u8], UbxEncodeError> {
+    let ret = buffer.get_mut(0..payload.len() + 8).ok_or(UbxEncodeError::BufferTooSmall)?;
+
+    ret[0] = 0xb5;
+    ret[1] = 0x62;
+    ret[2] = message_class;
+    ret[3] = message_id;
+    ret[4] = payload.len() as u8;
+    ret[5] = (payload.len() >> 8) as u8;
+    ret[6..payload.len() + 6].copy_from_slice(payload);
+
+    let mut checksum_a: u8 = 0;
+    let mut checksum_b: u8 = 0;
+    for x in &ret[2..ret.len() - 2] {
+        checksum_a = checksum_a.wrapping_add(*x);
+        checksum_b = checksum_b.wrapping_add(checksum_a);
+    }
+
+    ret[ret.len() - 2] = checksum_a;
+    ret[ret.len() - 1] = checksum_b;
+
+    Ok(ret)
+}
+
 fn spi_gnss_transmit(
     dp: &pac::Peripherals,
     stim: &mut itm::Stim,
@@ -455,26 +489,8 @@ fn spi_gnss_transmit(
     dp.GPIOB.odr.modify(|_, w| w.odr0().low());
     // TODO: delay?
 
-    let mut data = [0; 256];
-    let mut data = &mut data[0..payload.len() + 8];
-
-    data[0] = 0xb5;
-    data[1] = 0x62;
-    data[2] = message_class;
-    data[3] = message_id;
-    data[4] = payload.len() as u8;
-    data[5] = (payload.len() >> 8) as u8;
-    data[6..payload.len() + 6].copy_from_slice(payload);
-
-    let mut checksum_a: u8 = 0;
-    let mut checksum_b: u8 = 0;
-    for x in &data[2..data.len() - 2] {
-        checksum_a = checksum_a.wrapping_add(*x);
-        checksum_b = checksum_b.wrapping_add(checksum_a);
-    }
-
-    data[data.len() - 2] = checksum_a;
-    data[data.len() - 1] = checksum_b;
+    let mut buffer = [0; 256];
+    let data = ubx_encode(message_class, message_id, payload, &mut buffer).unwrap();
 
     // for x in data_send.iter() {
     //     iprint!(stim, "{:02x} ", x);
