@@ -438,9 +438,10 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
 //     // ....
 // }
 
-#[derive(Debug)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum UbxEncodeError {
     BufferTooSmall,
+    PayloadTooBig,
 }
 
 fn ubx_encode<'a>(
@@ -449,6 +450,10 @@ fn ubx_encode<'a>(
     payload: &[u8],
     buffer: &'a mut [u8],
 ) -> Result<&'a [u8], UbxEncodeError> {
+    if payload.len() > 0xffff {
+        return Err(UbxEncodeError::PayloadTooBig);
+    }
+
     let ret = buffer.get_mut(0..payload.len() + 8).ok_or(UbxEncodeError::BufferTooSmall)?;
 
     ret[0] = 0xb5;
@@ -470,6 +475,13 @@ fn ubx_encode<'a>(
     ret[ret.len() - 1] = checksum_b;
 
     Ok(ret)
+}
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum GnssReceiveState {
+    Idle,
+    UbxMessage,
+    NmeaMessage,
 }
 
 fn spi_gnss_transmit(
@@ -499,11 +511,40 @@ fn spi_gnss_transmit(
 
     let mut size = 0;
 
+    let mut state = GnssReceiveState::Idle;
+
     for i in 0..ret.len() {
         let x = data.get(i).cloned().unwrap_or(0xff);
         unsafe { ptr::write_volatile(dr, x) };
         while dp.SPI1.sr.read().frlvl() == 0 {}
         let x = unsafe { ptr::read_volatile(dr) };
+
+        let prev_state = state;
+
+        match state {
+            GnssReceiveState::Idle => {
+                if x == 0xb5 {
+                    state = GnssReceiveState::UbxMessage;
+                } else if x == '$' as u8 {
+                    state = GnssReceiveState::NmeaMessage;
+                }
+            }
+            GnssReceiveState::UbxMessage => {
+                if x == 0xff {
+                    state = GnssReceiveState::Idle;
+                }
+            }
+            GnssReceiveState::NmeaMessage => {
+                if x == 0xff || x == '\n' as u8 {
+                    state = GnssReceiveState::Idle;
+                }
+            }
+        }
+
+        if state != prev_state {
+            iprintln!(stim, "{:?}", state);
+        }
+
         // if i >= ret.len() && x == 0xff {
         //     break;
         // }
