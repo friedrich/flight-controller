@@ -525,8 +525,10 @@ fn spi_gnss_transmit(
             GnssReceiveState::Idle => {
                 if x == 0xb5 {
                     state = GnssReceiveState::UbxMessage;
+                    led(&dp, 0, 0, LED_COUNTER_PERIOD / 10);
                 } else if x == '$' as u8 {
                     state = GnssReceiveState::NmeaMessage;
+                    led(&dp, 0, 0, LED_COUNTER_PERIOD / 10);
                 }
             }
             GnssReceiveState::UbxMessage => {
@@ -1000,7 +1002,6 @@ fn accel<'a>(
 }
 
 fn gnss<'a>(dp: &'a pac::Peripherals, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
-    led(&dp, 0, 0, LED_COUNTER_PERIOD / 10);
     iprintln!(stim, "GNSS");
 
     // need to read and write single bytes
@@ -1029,16 +1030,17 @@ fn main() -> ! {
     let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
 
     init_led(&dp);
-    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
-
     init_spi(&dp);
-    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
+
+    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
 
     // wait for accelerometer to become available
     iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
     while accel_read(&dp, 0x0f) != 0x6b {
         delay.borrow_mut().delay_ms(1);
     }
+
+    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
 
     // radio(&dp, &delay, &stim);
     // accel(&dp, &delay, &stim);
