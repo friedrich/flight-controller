@@ -505,7 +505,7 @@ fn spi_gnss_transmit(
     dp.GPIOB.odr.modify(|_, w| w.odr0().low());
     // TODO: delay?
 
-    let mut buffer = [0; 256];
+    let mut buffer = [0; 2560];
     let data = ubx_encode(message_type, payload, &mut buffer).unwrap();
 
     // for x in data_send.iter() {
@@ -536,18 +536,21 @@ fn spi_gnss_transmit(
                 }
             }
             GnssReceiveState::UbxMessage => {
-                if x == 0xff {
-                    state = GnssReceiveState::Idle;
-                }
+                // if x == 0xff {
+                //     state = GnssReceiveState::Idle;
+                // }
             }
             GnssReceiveState::NmeaMessage => {
-                if x == 0xff || x == '\n' as u8 {
+                if x == 0xff || x == '\n' as u8 { // TODO: should 0xff lead to idle here as well?
                     state = GnssReceiveState::Idle;
                 }
             }
         }
 
         if state != prev_state {
+            if prev_state == GnssReceiveState::UbxMessage {
+                iprintln!(stim, "{:?}", ret);
+            }
             iprintln!(stim, "{:?}", state);
         }
 
@@ -558,6 +561,10 @@ fn spi_gnss_transmit(
         if x != 0xff {
             size = i;
         }
+    }
+
+    if state == GnssReceiveState::UbxMessage {
+        iprintln!(stim, "{:?}", ret);
     }
 
     // TODO: delay?
