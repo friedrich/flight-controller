@@ -760,6 +760,61 @@ impl<'a> Hal for RadioHal<'a> {
     }
 }
 
+fn init_radio<'a>(
+    dp: &'a pac::Peripherals,
+    delay: &'a RefCell<delay::Delay>,
+    stim: &'a RefCell<&'a mut itm::Stim>,
+) {
+    // loop {
+    //     let mut data = [0x80, 0x00];
+    //     spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    //     if data[0] & 0b11111100 == 0b01000100 {
+    //         led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
+    //     } else {
+    //         led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
+    //     }
+    //     delay.borrow_mut().delay_ms(10);
+    // }
+
+    // // wait for radio to become available
+    // loop {
+    //     let mut data = [0xc0, 0]; // GetStatus
+    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     print_response(stim, "GetStatus", &data);
+    //     if data[1] & 0b00011100 ==  {
+    //         iprintln!(&mut stim.borrow_mut(), "radio firmware: 0x{:04x}", firmware);
+    //         break;
+    //     }
+
+    //     delay.delay_ms(10); // not necessary
+    // }
+
+    // wait for radio to become available
+    iprintln!(&mut stim.borrow_mut(), "waiting for radio...");
+    let mut success_count = 0;
+    loop {
+        let mut data = [0x80, 0x00];
+        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+        if data[0] & 0b11111100 == 0b01000100 {
+            // let address: u16 = 0x0153;
+            // let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
+            // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+            // print_response1(&mut stim.borrow_mut(), data[0]);
+            // let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
+            // if firmware & 0xff00 == 0xa900 && (data[0] >> 2) & 0x7 != 0x7 {
+            success_count += 1;
+            if success_count == 10 {
+                // iprintln!(&mut stim.borrow_mut(), "SX128x firmware: {:04x}", firmware);
+                break;
+            }
+        } else {
+            success_count = 0;
+        }
+        delay.borrow_mut().delay_ms(10);
+    }
+}
+
+
 fn radio<'a>(
     dp: &'a pac::Peripherals,
     delay: &'a RefCell<delay::Delay>,
@@ -1044,15 +1099,19 @@ fn main() -> ! {
 
     led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
 
+    init_radio(&dp, &delay, &stim);
+
+    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
+
     // wait for accelerometer to become available
     iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
     while accel_read(&dp, 0x0f) != 0x6b {
         delay.borrow_mut().delay_ms(1);
     }
 
-    led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
+    led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
 
-    // radio(&dp, &delay, &stim);
+    radio(&dp, &delay, &stim);
     // accel(&dp, &delay, &stim);
 
     gnss(&dp, &mut delay.borrow_mut(), &mut stim.borrow_mut());
