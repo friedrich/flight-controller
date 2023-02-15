@@ -445,8 +445,7 @@ enum UbxEncodeError {
 }
 
 fn ubx_encode<'a>(
-    message_class: u8,
-    message_id: u8,
+    message_type: UbxMessageType,
     payload: &[u8],
     buffer: &'a mut [u8],
 ) -> Result<&'a [u8], UbxEncodeError> {
@@ -458,8 +457,8 @@ fn ubx_encode<'a>(
 
     ret[0] = 0xb5;
     ret[1] = 0x62;
-    ret[2] = message_class;
-    ret[3] = message_id;
+    ret[2] = (message_type as u16 >> 8) as u8;
+    ret[3] = message_type as u8;
     ret[4] = payload.len() as u8;
     ret[5] = (payload.len() >> 8) as u8;
     ret[6..payload.len() + 6].copy_from_slice(payload);
@@ -484,12 +483,17 @@ enum GnssReceiveState {
     NmeaMessage,
 }
 
+#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+enum UbxMessageType {
+    LogInfo = 0x2108,
+    MonMsgpp = 0x0a06,
+}
+
 fn spi_gnss_transmit(
     dp: &pac::Peripherals,
     stim: &mut itm::Stim,
     delay: &mut delay::Delay,
-    message_class: u8,
-    message_id: u8,
+    message_type: UbxMessageType,
     payload: &[u8],
     ret: &mut [u8],
 ) -> usize {
@@ -502,7 +506,7 @@ fn spi_gnss_transmit(
     // TODO: delay?
 
     let mut buffer = [0; 256];
-    let data = ubx_encode(message_class, message_id, payload, &mut buffer).unwrap();
+    let data = ubx_encode(message_type, payload, &mut buffer).unwrap();
 
     // for x in data_send.iter() {
     //     iprint!(stim, "{:02x} ", x);
@@ -1009,8 +1013,7 @@ fn gnss<'a>(dp: &'a pac::Peripherals, delay: &'a mut delay::Delay, stim: &'a mut
 
     loop {
         let mut ret = [0; 256];
-        // let size = spi_gnss_transmit(dp, stim, delay, 0x04, 0x04, &[], &mut ret);
-        let size = spi_gnss_transmit(dp, stim, delay, 0x21, 0x08, &[], &mut ret);
+        let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
         let ret = &ret[0..size];
         if !ret.is_empty() {
             for x in ret {
