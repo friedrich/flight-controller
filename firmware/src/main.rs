@@ -269,7 +269,7 @@ fn disable_spi(dp: &pac::Peripherals) {
     while dp.SPI1.sr.read().bsy().bit_is_set() {}
     dp.SPI1.cr1.modify(|_, w| w.spe().clear_bit());
     while dp.SPI1.sr.read().frlvl() != 0 {
-        // TODO: read data
+        dp.SPI1.dr.read().bits();
     }
 }
 
