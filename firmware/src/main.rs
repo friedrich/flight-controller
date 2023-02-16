@@ -275,6 +275,18 @@ fn disable_spi(dp: &pac::Peripherals) {
 
 const SPI_FREQUENCY_SETTING_ACCEL: u8 = 0;
 
+macro_rules! spi_read_single_byte {
+    ($spi:expr) => {
+        unsafe { ptr::read_volatile($spi.dr.as_ptr() as *mut u8) }
+    };
+}
+
+macro_rules! spi_write_single_byte {
+    ($spi:expr, $value:expr) => {
+        unsafe { ptr::write_volatile($spi.dr.as_ptr() as *mut u8, $value) }
+    };
+}
+
 fn accel_read_multiple(dp: &pac::Peripherals, address: u8, data: &mut [u8]) {
     enable_spi(dp, SPI_FREQUENCY_SETTING_ACCEL, true, true); // max 10 MHz for accelerometer
 
@@ -283,17 +295,14 @@ fn accel_read_multiple(dp: &pac::Peripherals, address: u8, data: &mut [u8]) {
     // 5 ns needed before clock goes low - TODO: make this nicer
     cortex_m::asm::nop();
 
-    // need to read and write single bytes
-    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
-
-    unsafe { ptr::write_volatile(dr, 1 << 7 | address) };
+    spi_write_single_byte!(dp.SPI1, 1 << 7 | address);
     while dp.SPI1.sr.read().frlvl() == 0 {}
-    unsafe { ptr::read_volatile(dr) };
+    spi_read_single_byte!(dp.SPI1);
 
     for x in data {
-        unsafe { ptr::write_volatile(dr, 0) };
+        spi_write_single_byte!(dp.SPI1, 0);
         while dp.SPI1.sr.read().frlvl() == 0 {}
-        *x = unsafe { ptr::read_volatile(dr) };
+        *x = spi_read_single_byte!(dp.SPI1);
     }
 
     // 20 ns needed before clock goes high - TODO: make this nicer
@@ -316,16 +325,16 @@ fn accel_write_multiple(dp: &pac::Peripherals, address: u8, data: &[u8]) {
     // need to read and write single bytes
     let dr = dp.SPI1.dr.as_ptr() as *mut u8;
 
-    unsafe { ptr::write_volatile(dr, address) };
+    spi_write_single_byte!(dp.SPI1, address);
 
     for x in data {
         while !dp.SPI1.sr.read().txe().bit() {}
-        unsafe { ptr::write_volatile(dr, *x) };
+        spi_write_single_byte!(dp.SPI1, *x);
     }
 
     while dp.SPI1.sr.read().bsy().bit() {}
     while dp.SPI1.sr.read().frlvl() != 0 {
-        unsafe { ptr::read_volatile(dr) };
+        spi_read_single_byte!(dp.SPI1);
     }
 
     // TODO: delay? (20 ns needed after clock goes high)
@@ -378,9 +387,9 @@ fn spi_radio_transmit(dp: &pac::Peripherals, delay: &mut delay::Delay, data: &mu
     delay.delay_us(125_u32); // TODO: correct?
 
     for x in data {
-        unsafe { ptr::write_volatile(dr, *x) };
+        spi_write_single_byte!(dp.SPI1, *x);
         while dp.SPI1.sr.read().frlvl() == 0 {}
-        *x = unsafe { ptr::read_volatile(dr) };
+        *x = spi_read_single_byte!(dp.SPI1);
     }
 
     // TODO: delay?
@@ -519,9 +528,9 @@ fn spi_gnss_transmit(
 
     for i in 0..ret.len() {
         let x = data.get(i).cloned().unwrap_or(0xff);
-        unsafe { ptr::write_volatile(dr, x) };
+        spi_write_single_byte!(dp.SPI1, x);
         while dp.SPI1.sr.read().frlvl() == 0 {}
-        let x = unsafe { ptr::read_volatile(dr) };
+        let x = spi_read_single_byte!(dp.SPI1);
 
         let prev_state = state;
 
@@ -813,7 +822,6 @@ fn init_radio<'a>(
         delay.borrow_mut().delay_ms(10);
     }
 }
-
 
 fn radio<'a>(
     dp: &'a pac::Peripherals,
