@@ -8,10 +8,41 @@
   particularly annying when debugging that only the microcontroller gets reset
   using the programmer.
 - Connect the SX1280 busy pin to the microcontroller.
-- Add probe points:
+- Add test points:
   - GND
   - chip select
   - SDI
   - SDO
   - SCK
   - ...?
+- Print version number on the PCB.
+- Remove small compenents slik screen labels.
+
+TODO: check if MAIN_SENSE and TAIL_SENSE work!
+
+# GPIO pins
+
+| PA0  | NC         |
+| PA1  | TAIL_CTL   |
+| PA2  | LEFT_CTL   |
+| PA3  | /RADIO_CS  |
+| PA4  | /ACCEL_CS  |
+| PA5  | SCK        |
+| PA6  | SDI        |
+| PA7  | SDO        |
+| PA8  | NC         |
+| PA9  | NC         |
+| PA10 | BATT_MON   |
+| PA11 | RIGHT_CTL  |
+| PA12 | BACK_CTL   |
+| PA13 | SWDIO      |
+| PA14 | SWCLK      |
+| PA15 | NC         |
+| PB0  | /GNSS_CS   |
+| PB3  | SWO        |
+| PB4  | LED_R      |
+| PB5  | LED_G      |
+| PB6  | MAIN_CTL   |
+| PB7  | LED_B      |
+| PF0  | MAIN_SENSE |
+| PF1  | TAIL_SENSE |
