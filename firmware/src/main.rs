@@ -1,28 +1,31 @@
 #![no_std]
 #![no_main]
+#![allow(unreachable_code, unused)] // TODO: remove!
 
 mod radio_hal;
+mod spi;
 
 use core::cell::RefCell;
-use core::ptr;
 use cortex_m::delay;
 use cortex_m::peripheral::itm;
 use cortex_m::{iprint, iprintln};
 use cortex_m_rt::entry;
 use cortex_m_semihosting::{hprint, hprintln};
-use embedded_hal::digital::PinState;
+use num_derive::FromPrimitive;
+use num_traits::FromPrimitive;
 use panic_itm as _;
-use paste::paste;
 use radio::Transmit;
-use radio_sx128x::base::Hal;
-use stm32g4::stm32g4a1 as pac;
-use stm32g4::stm32g4a1::{gpioa, gpiob};
 use radio_hal::RadioHal;
+use radio_sx128x::base::Hal;
+use spi::Spi;
+use stm32g4::stm32g4a1 as pac;
+use stm32g4::stm32g4a1::gpiob;
 
 const HSI16_CLOCK_FREQUENCY: u32 = 16_000_000;
 const AHB_CLOCK_FREQUENCY: u32 = HSI16_CLOCK_FREQUENCY;
 const LED_COUNTER_PERIOD: u32 = 16_000;
 
+#[macro_export]
 macro_rules! pin_mode_input {
     ($gpio:expr, $num:literal, $pull:expr) => {
         paste! {
@@ -32,9 +35,10 @@ macro_rules! pin_mode_input {
     };
 }
 
+#[macro_export]
 macro_rules! pin_mode_output {
     ($gpio:expr, $num:literal, $type:expr, $speed:expr, $state:expr) => {
-        paste! {
+        paste::paste! {
             $gpio.ospeedr.modify(|_, w| w.[<ospeedr $num>]().variant($speed));
             $gpio.otyper.modify(|_, w| w.[<ot $num>]().variant($type));
             $gpio.odr.modify(|_, w| w.[<odr $num>]().bit($state));
@@ -44,9 +48,10 @@ macro_rules! pin_mode_output {
     };
 }
 
+#[macro_export]
 macro_rules! pin_mode_alternate {
     ($gpio:expr, $num:literal, $type:expr, $pull:expr, $speed:expr, $alt:expr) => {
-        paste! {
+        paste::paste! {
             $gpio.afrl.modify(|_, w| w.[<afrl $num>]().variant($alt));
             // $gpio.afrh.modify(|_, w| w.[<afrh $num>]().variant($alt));
             $gpio.ospeedr.modify(|_, w| w.[<ospeedr $num>]().variant($speed));
@@ -221,91 +226,20 @@ fn blub() {
     // PB8/BOOT0 is in input mode during the reset until at least the end of the option byte loading phase. See Section 9.3.15: Using PB8 as GPIO.
 }
 
-fn init_spi(dp: &pac::Peripherals) {
-    use gpioa::afrl::AFRL0_A::Af5;
-    use gpioa::ospeedr::OSPEEDR0_A::VeryHighSpeed as AVeryHighSpeed;
-    use gpioa::otyper::OT0_A::PushPull as APushPull;
-    use gpioa::pupdr::PUPDR0_A::Floating as AFloating;
-    use gpiob::ospeedr::OSPEEDR0_A::VeryHighSpeed as BVeryHighSpeed;
-    use gpiob::otyper::OT0_A::PushPull as BPushPull;
-
-    // enable clocks
-    dp.RCC.apb2enr.modify(|_, w| w.spi1en().enabled());
-    dp.RCC.ahb2enr.modify(|_, w| w.gpioaen().enabled());
-    dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
-
-    // configure CS pins
-    pin_mode_output!(dp.GPIOA, 3, APushPull, AVeryHighSpeed, true);
-    pin_mode_output!(dp.GPIOA, 4, APushPull, AVeryHighSpeed, true);
-    pin_mode_output!(dp.GPIOB, 0, BPushPull, BVeryHighSpeed, true);
-
-    // configure SPI pins
-    pin_mode_alternate!(dp.GPIOA, 5, APushPull, AFloating, AVeryHighSpeed, Af5);
-    pin_mode_alternate!(dp.GPIOA, 6, APushPull, AFloating, AVeryHighSpeed, Af5);
-    pin_mode_alternate!(dp.GPIOA, 7, APushPull, AFloating, AVeryHighSpeed, Af5);
-
-    // configure SPI
-    dp.SPI1.cr1.modify(|_, w| w.rxonly().clear_bit().bidimode().clear_bit()); // full duplex mode
-    dp.SPI1.cr1.modify(|_, w| w.lsbfirst().clear_bit()); // MSB first
-    dp.SPI1.cr1.modify(|_, w| w.ssm().set_bit()); // software chip select management
-    dp.SPI1.cr1.modify(|_, w| w.ssi().set_bit()); // enable internal chip select
-    dp.SPI1.cr1.modify(|_, w| w.mstr().set_bit()); // act as controller
-    dp.SPI1.cr2.modify(|_, w| w.ds().variant(0b0111)); // 8 bit data size
-    dp.SPI1.cr2.modify(|_, w| w.ssoe().clear_bit()); // disable chip select output
-    dp.SPI1.cr2.modify(|_, w| w.frxth().set_bit()); // RXNE event is generated if the FIFO level is greater than or equal to 1/4 (8-bit)
-}
-
-// baud rate = f_PCLK / 2^(baud_rate_setting+1)
-// baud_rate_setting <= 7
-fn enable_spi(dp: &pac::Peripherals, baud_rate_setting: u8, cpol: bool, cpha: bool) {
-    // configure SPI
-    dp.SPI1.cr1.modify(|_, w| w.br().variant(baud_rate_setting));
-    dp.SPI1.cr1.modify(|_, w| w.cpol().bit(cpol));
-    dp.SPI1.cr1.modify(|_, w| w.cpha().bit(cpha));
-
-    // enable SPI
-    dp.SPI1.cr1.modify(|_, w| w.spe().set_bit());
-}
-
-fn disable_spi(dp: &pac::Peripherals) {
-    while dp.SPI1.sr.read().ftlvl() != 0 {}
-    while dp.SPI1.sr.read().bsy().bit_is_set() {}
-    dp.SPI1.cr1.modify(|_, w| w.spe().clear_bit());
-    while dp.SPI1.sr.read().frlvl() != 0 {
-        dp.SPI1.dr.read().bits();
-    }
-}
-
 const SPI_FREQUENCY_SETTING_ACCEL: u8 = 0;
 
-macro_rules! spi_read_single_byte {
-    ($spi:expr) => {
-        unsafe { ptr::read_volatile($spi.dr.as_ptr() as *mut u8) }
-    };
-}
-
-macro_rules! spi_write_single_byte {
-    ($spi:expr, $value:expr) => {
-        unsafe { ptr::write_volatile($spi.dr.as_ptr() as *mut u8, $value) }
-    };
-}
-
-fn accel_read_multiple(dp: &pac::Peripherals, address: u8, data: &mut [u8]) {
-    enable_spi(dp, SPI_FREQUENCY_SETTING_ACCEL, true, true); // max 10 MHz for accelerometer
-
-    dp.GPIOA.odr.modify(|_, w| w.odr4().low());
+fn accel_read_multiple(spi: &mut Spi, delay: &mut delay::Delay, address: u8, data: &mut [u8]) {
+    spi.activate_peripheral(spi::Peripheral::Imu, delay);
 
     // 5 ns needed before clock goes low - TODO: make this nicer
     cortex_m::asm::nop();
 
-    spi_write_single_byte!(dp.SPI1, 1 << 7 | address);
-    while dp.SPI1.sr.read().frlvl() == 0 {}
-    spi_read_single_byte!(dp.SPI1);
+    spi.write(1 << 7 | address);
+    spi.read();
 
     for x in data {
-        spi_write_single_byte!(dp.SPI1, 0);
-        while dp.SPI1.sr.read().frlvl() == 0 {}
-        *x = spi_read_single_byte!(dp.SPI1);
+        spi.write(0);
+        *x = spi.read();
     }
 
     // 20 ns needed before clock goes high - TODO: make this nicer
@@ -314,47 +248,32 @@ fn accel_read_multiple(dp: &pac::Peripherals, address: u8, data: &mut [u8]) {
     cortex_m::asm::nop();
     cortex_m::asm::nop();
 
-    dp.GPIOA.odr.modify(|_, w| w.odr4().high());
-
-    disable_spi(dp);
+    spi.deactivate_peripheral();
 }
 
-fn accel_write_multiple(dp: &pac::Peripherals, address: u8, data: &[u8]) {
-    enable_spi(dp, SPI_FREQUENCY_SETTING_ACCEL, true, true); // max 10 MHz for accelerometer
+fn accel_write_multiple(spi: &mut Spi, delay: &mut delay::Delay, address: u8, data: &[u8]) {
+    spi.activate_peripheral(spi::Peripheral::Imu, delay);
 
-    dp.GPIOA.odr.modify(|_, w| w.odr4().low());
-    // TODO: delay? (5 ns needed before clock goes low)
-
-    // need to read and write single bytes
-    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
-
-    spi_write_single_byte!(dp.SPI1, address);
+    spi.write(address);
+    spi.read();
 
     for x in data {
-        while !dp.SPI1.sr.read().txe().bit() {}
-        spi_write_single_byte!(dp.SPI1, *x);
+        spi.write(*x);
+        spi.read();
     }
 
-    while dp.SPI1.sr.read().bsy().bit() {}
-    while dp.SPI1.sr.read().frlvl() != 0 {
-        spi_read_single_byte!(dp.SPI1);
-    }
-
-    // TODO: delay? (20 ns needed after clock goes high)
-    dp.GPIOA.odr.modify(|_, w| w.odr4().high());
-
-    disable_spi(dp);
+    spi.deactivate_peripheral();
 }
 
-fn accel_read(p: &pac::Peripherals, address: u8) -> u8 {
+fn accel_read(spi: &mut Spi, delay: &mut delay::Delay, address: u8) -> u8 {
     let mut data = [0];
-    accel_read_multiple(p, address, &mut data);
+    accel_read_multiple(spi, delay, address, &mut data);
     data[0]
 }
 
-fn accel_write(p: &pac::Peripherals, address: u8, data: u8) {
+fn accel_write(spi: &mut Spi, delay: &mut delay::Delay, address: u8, data: u8) {
     let data = [data];
-    accel_write_multiple(p, address, &data);
+    accel_write_multiple(spi, delay, address, &data);
 }
 
 struct AccelerometerData {
@@ -362,10 +281,10 @@ struct AccelerometerData {
     gyroscope: (i16, i16, i16),
 }
 
-fn read_accelerometer_data(dp: &pac::Peripherals) -> AccelerometerData {
+fn read_accelerometer_data(spi: &mut Spi, delay: &mut delay::Delay) -> AccelerometerData {
     let mut data = [0; 12];
 
-    accel_read_multiple(&dp, 0x22, &mut data);
+    accel_read_multiple(spi, delay, 0x22, &mut data);
 
     let gx = (u16::from(data[1]) << 8 | u16::from(data[0])) as i16;
     let gy = (u16::from(data[3]) << 8 | u16::from(data[2])) as i16;
@@ -380,25 +299,17 @@ fn read_accelerometer_data(dp: &pac::Peripherals) -> AccelerometerData {
     }
 }
 
-fn spi_radio_transmit(dp: &pac::Peripherals, delay: &mut delay::Delay, data: &mut [u8]) {
-    enable_spi(dp, 0, false, false); // max 18 MHz according to datasheet of SX1280
-
-    // need to read and write single bytes
-    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
-
-    dp.GPIOA.odr.modify(|_, w| w.odr3().low());
-    delay.delay_us(125_u32); // TODO: correct?
+fn spi_radio_transmit(spi: &mut Spi, delay: &mut delay::Delay, data: &mut [u8]) {
+    spi.activate_peripheral(spi::Peripheral::Radio, delay);
 
     for x in data {
-        spi_write_single_byte!(dp.SPI1, *x);
-        while dp.SPI1.sr.read().frlvl() == 0 {}
-        *x = spi_read_single_byte!(dp.SPI1);
+        spi.write(*x);
+        // hprintln!("out {:02x}", *x);
+        *x = spi.read();
+        // hprintln!("in {:02x}", *x);
     }
 
-    // TODO: delay?
-    dp.GPIOA.odr.modify(|_, w| w.odr3().high());
-
-    disable_spi(dp);
+    spi.deactivate_peripheral();
 }
 
 fn print_response1(stim: &mut itm::Stim, response: u8) {
@@ -418,33 +329,33 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
 
 //     // SetStandby(STDBY_RC)
 //     let mut data = [0x80, 0];
-//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
 //     print_response(stim, "SetStandby", &data);
 
 //     // SetPacketType(PACKET_TYPE_BLE)
 //     let mut data = [0x8a, 0x04];
-//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
 //     print_response(stim, "SetPacketType", &data);
 
 //     // SetRfFrequency(rfFrequency)
 //     let mut data = [0x86, 0xB8, 0x9D, 0x89]; // TODO: this frequency is probably incorrect
-//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
 //     print_response(stim, "SetRfFrequency", &data);
 
 //     // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
 //     let mut data = [0x8F, 0x80, 0x00];
-//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
 //     print_response(stim, "SetBufferBaseAddress", &data);
 
 //     // SetModulationParams(BLE_BR_1_000_BW_1_2, MOD_IND_0_5, BT_0_5)
 //     let mut data = [0x8B, 0x45, 0x01, 0x20];
-//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
 //     print_response(stim, "SetModulationParams", &data);
 
 //     // SetPacketParams(packetParam[0], packetParam[1], packetParam[2], packetParam[3])
 //     // Although this command can accept up to 7 arguments, in BLE mode SetPacketParams can accept only 4. However the 3 remaining arguments must be set to 0 and sent to the radio.
 //     let mut data = [0x8C, ...];
-//     spi_radio_transmit(&dp, &mut delay, &mut data);
+//     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
 //     print_response(stim, "SetPacketParams", &data);
 
 //     // ....
@@ -491,31 +402,43 @@ fn ubx_encode<'a>(
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum GnssReceiveState {
     Idle,
-    UbxMessage,
+    UbxMessage(usize),
     NmeaMessage,
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
+#[derive(Debug, Copy, Clone, PartialEq, Eq, FromPrimitive)]
 enum UbxMessageType {
+    AckAck = 0x0501,
+    AckNak = 0x0500,
+    CfgPrt = 0x0600,
+    CfgMsg = 0x0601,
+    CfgNmea = 0x0617,
     LogInfo = 0x2108,
     MonMsgpp = 0x0a06,
 }
 
+// struct UbxMessage {
+//     message_type: UbxMessageType,
+//     payload: &[u8],
+// }
+
+// fn gnss_transmit(
+//     dp: &pac::Peripherals,
+//     stim: &mut itm::Stim,
+//     messages: &[UbxMessage],
+//     read_length: usize) {
+
+// }
+
 fn spi_gnss_transmit(
-    dp: &pac::Peripherals,
+    spi: &mut Spi,
     stim: &mut itm::Stim,
     delay: &mut delay::Delay,
     message_type: UbxMessageType,
     payload: &[u8],
     ret: &mut [u8],
 ) -> usize {
-    enable_spi(dp, 7, false, false); // max 5.5 MHz for GNSS receiver
-
-    // need to read and write single bytes
-    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
-
-    dp.GPIOB.odr.modify(|_, w| w.odr0().low());
-    // TODO: delay?
+    spi.activate_peripheral(spi::Peripheral::Gnss, delay);
 
     let mut buffer = [0; 2560];
     let data = ubx_encode(message_type, payload, &mut buffer).unwrap();
@@ -528,73 +451,143 @@ fn spi_gnss_transmit(
     let mut size = 0;
 
     let mut state = GnssReceiveState::Idle;
+    let mut message_size = 0;
+    let mut message_type_number = 0;
 
-    for i in 0..ret.len() {
-        let x = data.get(i).cloned().unwrap_or(0xff);
-        spi_write_single_byte!(dp.SPI1, x);
-        while dp.SPI1.sr.read().frlvl() == 0 {}
-        let x = spi_read_single_byte!(dp.SPI1);
+    let mut blub = 0;
+    loop {
+        // for i in 0..ret.len() {
+        if blub == 0 {
+            iprintln!(stim, "sending...");
+        } else if blub == data.len() {
+            iprintln!(stim, "sending complete");
+        }
+
+        let y = data.get(blub).cloned().unwrap_or(0xff);
+        spi.write(y);
+        let x = spi.read();
+
+        // iprintln!(stim, "out={:02x} in={:02x}", y, x);
 
         let prev_state = state;
 
         match state {
             GnssReceiveState::Idle => {
                 if x == 0xb5 {
-                    state = GnssReceiveState::UbxMessage;
-                    led(&dp, 0, 0, LED_COUNTER_PERIOD / 10);
+                    ret[0] = x;
+                    state = GnssReceiveState::UbxMessage(1);
                 } else if x == '$' as u8 {
                     state = GnssReceiveState::NmeaMessage;
-                    led(&dp, 0, 0, LED_COUNTER_PERIOD / 10);
+                    iprintln!(stim, "NMEA Message");
                 }
             }
-            GnssReceiveState::UbxMessage => {
-                // if x == 0xff {
-                //     state = GnssReceiveState::Idle;
-                // }
+            GnssReceiveState::UbxMessage(i) => {
+                // iprintln!(stim, "i={}", i);
+                // iprintln!(stim, "{}", i - message_size as usize + 1);
+                if i >= ret.len() {
+                    iprintln!(stim, "message too long {:?}", &ret[0..i]);
+                    state = GnssReceiveState::Idle;
+                } else {
+                    ret[i] = x;
+                    state = GnssReceiveState::UbxMessage(i + 1);
+                    if i == 5 {
+                        if ret[0] == 0xb5 && ret[1] == 0x62 {
+                            message_type_number = u16::from(ret[2]) << 8 | u16::from(ret[3]);
+                            message_size = u16::from(ret[5]) << 8 | u16::from(ret[4]) + 8;
+                            // iprintln!(stim, "message length: {}", message_size);
+                        } else {
+                            state = GnssReceiveState::Idle;
+                            iprintln!(stim, "invalid message {:?}", &ret[0..i + 1]);
+                        }
+                    } else if i > 5 && i == message_size as usize - 1 {
+                        state = GnssReceiveState::Idle;
+
+                        match UbxMessageType::from_u16(message_type_number) {
+                            Some(UbxMessageType::CfgNmea) => {
+                                iprintln!(
+                                    stim,
+                                    "config message: {:?}",
+                                    &ret[0..message_size as usize]
+                                );
+                            }
+                            Some(UbxMessageType::AckAck) => {
+                                iprintln!(
+                                    stim,
+                                    "ack message: {:?}",
+                                    &ret[0..message_size as usize]
+                                );
+                            }
+                            Some(UbxMessageType::AckNak) => {
+                                iprintln!(
+                                    stim,
+                                    "nack message: {:?}",
+                                    &ret[0..message_size as usize]
+                                );
+                            }
+                            Some(UbxMessageType::CfgPrt) => {
+                                iprintln!(
+                                    stim,
+                                    "port config message: {:02x?}",
+                                    &ret[0..message_size as usize]
+                                );
+                            }
+                            _ => {
+                                iprintln!(stim, "unknown message: {:04x}", message_type_number);
+                            }
+                        }
+                        // ret[2] = (message_type as u16 >> 8) as u8;
+                        // ret[3] = message_type as u8;
+                    }
+                }
             }
             GnssReceiveState::NmeaMessage => {
-                if x == 0xff || x == '\n' as u8 { // TODO: should 0xff lead to idle here as well?
+                if x == 0xff || x == '\n' as u8 {
+                    // TODO: should 0xff lead to idle here as well?
                     state = GnssReceiveState::Idle;
                 }
             }
         }
 
         if state != prev_state {
-            if prev_state == GnssReceiveState::UbxMessage {
-                iprintln!(stim, "{:?}", ret);
+            if let GnssReceiveState::UbxMessage(_) = prev_state {
+                // iprintln!(stim, "{:?}", ret);
+            } else {
+                // iprintln!(stim, "{:?}", state);
             }
-            iprintln!(stim, "{:?}", state);
         }
 
         // if i >= ret.len() && x == 0xff {
         //     break;
         // }
-        ret[i] = x;
+        ret.get_mut(blub).and_then(|v| {
+            *v = x;
+            None::<()>
+        });
         if x != 0xff {
-            size = i;
+            size = blub;
+        }
+
+        blub += 1;
+        if blub == 100000 {
+            blub = 0;
         }
     }
 
-    if state == GnssReceiveState::UbxMessage {
+    if let GnssReceiveState::UbxMessage(_) = state {
         iprintln!(stim, "{:?}", ret);
     }
-
-    // TODO: delay?
-    dp.GPIOB.odr.modify(|_, w| w.odr0().high());
-
-    disable_spi(dp);
 
     size
 }
 
 fn init_radio<'a>(
-    dp: &'a pac::Peripherals,
+    spi: &mut Spi,
     delay: &'a RefCell<delay::Delay>,
     stim: &'a RefCell<&'a mut itm::Stim>,
 ) {
     // loop {
     //     let mut data = [0x80, 0x00];
-    //     spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     //     if data[0] & 0b11111100 == 0b01000100 {
     //         led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
     //     } else {
@@ -606,7 +599,7 @@ fn init_radio<'a>(
     // // wait for radio to become available
     // loop {
     //     let mut data = [0xc0, 0]; // GetStatus
-    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
     //     print_response(stim, "GetStatus", &data);
     //     if data[1] & 0b00011100 ==  {
     //         iprintln!(&mut stim.borrow_mut(), "radio firmware: 0x{:04x}", firmware);
@@ -621,11 +614,11 @@ fn init_radio<'a>(
     let mut success_count = 0;
     loop {
         let mut data = [0x80, 0x00];
-        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+        spi_radio_transmit(spi, &mut delay.borrow_mut(), &mut data);
         if data[0] & 0b11111100 == 0b01000100 {
             // let address: u16 = 0x0153;
             // let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
-            // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+            // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
             // print_response1(&mut stim.borrow_mut(), data[0]);
             // let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
             // if firmware & 0xff00 == 0xa900 && (data[0] >> 2) & 0x7 != 0x7 {
@@ -642,13 +635,13 @@ fn init_radio<'a>(
 }
 
 fn radio<'a>(
-    dp: &'a pac::Peripherals,
+    spi: &'a RefCell<Spi<'a>>,
     delay: &'a RefCell<delay::Delay>,
     stim: &'a RefCell<&'a mut itm::Stim>,
 ) {
     // loop {
     //     let mut data = [0x80, 0x00];
-    //     spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     //     if data[0] & 0b11111100 == 0b01000100 {
     //         led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
     //     } else {
@@ -660,7 +653,7 @@ fn radio<'a>(
     // // wait for radio to become available
     // loop {
     //     let mut data = [0xc0, 0]; // GetStatus
-    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
     //     print_response(stim, "GetStatus", &data);
     //     if data[1] & 0b00011100 ==  {
     //         iprintln!(&mut stim.borrow_mut(), "radio firmware: 0x{:04x}", firmware);
@@ -675,11 +668,11 @@ fn radio<'a>(
     let mut success_count = 0;
     loop {
         let mut data = [0x80, 0x00];
-        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+        spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
         if data[0] & 0b11111100 == 0b01000100 {
             // let address: u16 = 0x0153;
             // let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
-            // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+            // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
             // print_response1(&mut stim.borrow_mut(), data[0]);
             // let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
             // if firmware & 0xff00 == 0xa900 && (data[0] >> 2) & 0x7 != 0x7 {
@@ -694,19 +687,19 @@ fn radio<'a>(
         delay.borrow_mut().delay_ms(10);
     }
 
-    led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
+    // led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
     // delay.borrow_mut().delay_ms(100);
 
     // // test radio reading and writing
     // loop {
     //     let address: u16 = 0x9ce;
     //     let mut data = [0x18, (address >> 8) as u8, address as u8, 1, 2, 3, 4, 5];
-    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
     //     // iprintln!(&mut stim.borrow_mut(), "status: {:?}", &data);
 
     //     let address: u16 = 0x9ce;
     //     let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0, 0, 0, 0];
-    //     spi_radio_transmit(&dp, &mut delay, &mut data);
+    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
     //     let data = &data[4..];
     //     // iprintln!(&mut stim.borrow_mut(), "data: {:?}", data);
     //     if data == [1, 2, 3, 4, 5] {
@@ -719,8 +712,8 @@ fn radio<'a>(
     let radio_config = radio_sx128x::Config::gfsk();
     let mut radio = radio_sx128x::Sx128x::new(
         RadioHal {
-            dp: dp,
-            delay: delay,
+            spi,
+            delay,
             stim: &stim,
         },
         &radio_config,
@@ -755,20 +748,20 @@ fn radio<'a>(
     // loop {
     // SetStandby(STDBY_RC)
     let mut data = [0x80, 0x00];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetStandby", &data);
 
     // TODO: do we need to calibrate the internal RC oscillator?
     // Calibrate()
     // let mut data = [0x89, 0b00111111];
     let mut data = [0x89, 0b00001010];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "Calibrate", &data);
 
     // wait for calibration to finish - this is not documented
     loop {
         let mut data = [0xc0, 0]; // GetStatus
-        spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+        spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
         print_response(&mut stim.borrow_mut(), "GetStatus", &data);
         if (data[0] >> 2) & 0x7 != 0 {
             break;
@@ -777,76 +770,77 @@ fn radio<'a>(
 
     // SetPacketType(PACKET_TYPE_GFSK)
     let mut data = [0x8a, 0x00];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetPacketType", &data);
 
     // SetRfFrequency(rfFrequency)
     let mut data = [0x86, 0xb8, 0x9d, 0x89]; // frequency = parameter * 203125 / 1024
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetRfFrequency", &data);
 
     // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
     let mut data = [0x8f, 0x80, 0x00];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetBufferBaseAddress", &data);
 
     // TODO: good values?
     // SetModulationParams(...)
     let mut data = [0x8b, 0x04, 0x00, 0x00];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetModulationParams", &data);
 
     // SetPacketParams(...)
     let mut data = [0x8c, 0x00, 0x00, 0x00, 0x00, 0x10, 0x00, 0x08];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetPacketParams", &data);
 
     // SetTxParams(power, ramptime)
     let mut data = [0x8e, 0x1f, 0xe0];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetTxParams", &data);
 
     // SetStandby(STDBY_RC)
     let mut data = [0x80, 0x00];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetStandby", &data);
 
     // send
 
     // // SetDioIrqParams(...)
     // let mut data = [0x8d, 64, 65, 64, 65, 0, 0, 0, 0];
-    // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     // print_response(&mut stim.borrow_mut(), "SetDioIrqParams", &data);
 
     // // clear IRQ status. TODO: correct mask?
     // let mut data = [0x97, 0xff, 0xff];
-    // spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     // iprintln!(&mut stim.borrow_mut(), "response: {:?}", data);
 
     // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
     let mut data = [0x83, 0x00, 0x00, 0x00];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetTx", &data);
 
     // GetPacketStatus()
     let mut data = [0x1d, 0, 0, 0, 0, 0, 0];
-    spi_radio_transmit(&dp, &mut delay.borrow_mut(), &mut data);
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
 }
 
 fn accel<'a>(
+    spi: &mut Spi,
     dp: &'a pac::Peripherals,
     delay: &'a RefCell<delay::Delay>,
     stim: &'a RefCell<&'a mut itm::Stim>,
 ) {
-    accel_write(&dp, 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
-    accel_write(&dp, 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
+    accel_write(spi, &mut delay.borrow_mut(), 0x10, 0b10100000); // CTRL1_XL, 6.66 kHz
+    accel_write(spi, &mut delay.borrow_mut(), 0x11, 0b10100000); // CTRL2_G, 6.66 kHz
 
     let mut v = (0.0, 0.0, 0.0);
     let mut g = (0.0, 0.0, 0.0);
 
     loop {
-        let data = read_accelerometer_data(&dp);
+        let data = read_accelerometer_data(spi, &mut delay.borrow_mut());
         v.0 += f32::from(data.acceleration.0) / 10000.0;
         v.1 += f32::from(data.acceleration.1) / 10000.0;
         v.2 += f32::from(data.acceleration.2) / 10000.0;
@@ -893,15 +887,46 @@ fn accel<'a>(
     }
 }
 
-fn gnss<'a>(dp: &'a pac::Peripherals, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
+fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
     iprintln!(stim, "GNSS");
-
-    // need to read and write single bytes
-    let dr = dp.SPI1.dr.as_ptr() as *mut u8;
 
     loop {
         let mut ret = [0; 256];
-        let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
+        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
+        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[], &mut ret);
+        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[
+        //     0x00, // filter (default 0x00)
+        //     0x40, // nmeaVersion
+        //     0x00, // numSV
+        //     0x02, // flags (default: 0x02)
+        //     0, 0, 0, 0, 0, 0, 0,
+        //     0x01, // message version
+        //     0, 0, 0, 0, 0, 0, 0, 0], &mut ret);
+        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgMsg, &[
+        //     0x00, // msgClass
+        //     0x00, // msgID
+        //     0x00, // rate
+        // ], &mut ret);
+        let size = spi_gnss_transmit(spi, stim, delay, UbxMessageType::CfgPrt, &[0x04], &mut ret);
+        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgPrt, &[
+        //     0x04, // port id
+        //     0x00, // reserved
+        //     0x00, // tx ready
+        //     0x00, // tx ready
+        //     0x00, // SPI mode
+        //     0x32, // SPI mode (default 0x32)
+        //     0x00, // SPI mode
+        //     0x00, // SPI mode
+        //     0, 0, 0, 0, // reserved
+        //     0b00000011, // inProtoMask (default 0b00000111)
+        //     0b00000000, // inProtoMask (default 0b00000000)
+        //     0b00000011, // outProtoMask (default 0b00000011)
+        //     0b00000000, // outProtoMask (default 0b00000000)
+        //     0x00, // flags
+        //     0x00, // flags
+        //     0, 0 // reserved
+        // ], &mut ret);
+
         let ret = &ret[0..size];
         if !ret.is_empty() {
             for x in ret {
@@ -921,26 +946,30 @@ fn main() -> ! {
     let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
 
     init_led(&dp);
-    init_spi(&dp);
+    let mut spi = RefCell::new(Spi::new(&dp));
 
     led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
 
-    init_radio(&dp, &delay, &stim);
+    init_radio(&mut spi.borrow_mut(), &delay, &stim);
 
     led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
 
     // wait for accelerometer to become available
     iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
-    while accel_read(&dp, 0x0f) != 0x6b {
+    while accel_read(&mut spi.borrow_mut(), &mut delay.borrow_mut(), 0x0f) != 0x6b {
         delay.borrow_mut().delay_ms(1);
     }
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
 
-    radio(&dp, &delay, &stim);
-    // accel(&dp, &delay, &stim);
+    radio(&spi, &delay, &stim);
+    accel(&mut spi.borrow_mut(), &dp, &delay, &stim);
 
-    gnss(&dp, &mut delay.borrow_mut(), &mut stim.borrow_mut());
+    gnss(
+        &mut spi.borrow_mut(),
+        &mut delay.borrow_mut(),
+        &mut stim.borrow_mut(),
+    );
 
     loop {}
 }

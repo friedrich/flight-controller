@@ -9,7 +9,7 @@ use embedded_hal::digital::blocking::{InputPin, OutputPin};
 
 
 use embedded_hal::delay::blocking::DelayUs;
-use embedded_hal::spi::blocking::{Transactional, Operation};
+use embedded_hal::spi::blocking::{Operation};
 
 use crate::{device::*, SpiBase};
 use crate::Error;

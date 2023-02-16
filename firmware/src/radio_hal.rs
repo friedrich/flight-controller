@@ -1,15 +1,14 @@
 use core::cell::RefCell;
 
-use cortex_m::{iprintln, delay};
 use cortex_m::peripheral::itm;
+use cortex_m::{delay, iprintln};
 use embedded_hal::digital::PinState;
 use radio_sx128x::base::Hal;
-use stm32g4::stm32g4a1 as pac;
 
-use crate::{spi_radio_transmit, print_response1};
+use crate::{print_response1, spi_radio_transmit};
 
 pub struct RadioHal<'a> {
-    pub dp: &'a pac::Peripherals,
+    pub spi: &'a RefCell<crate::spi::Spi<'a>>,
     pub delay: &'a RefCell<delay::Delay>,
     pub stim: &'a RefCell<&'a mut itm::Stim>,
 }
@@ -68,7 +67,11 @@ impl<'a> Hal for RadioHal<'a> {
         buffer[0] = command;
         buffer[1..].copy_from_slice(data);
 
-        spi_radio_transmit(self.dp, &mut self.delay.borrow_mut(), &mut buffer);
+        spi_radio_transmit(
+            &mut self.spi.borrow_mut(),
+            &mut self.delay.borrow_mut(),
+            &mut buffer,
+        );
 
         // print_response1(&mut self.stim.borrow_mut(), buffer[0]);
         for x in buffer {
@@ -96,7 +99,11 @@ impl<'a> Hal for RadioHal<'a> {
         buffer[0] = command;
         buffer[1..].copy_from_slice(data);
 
-        spi_radio_transmit(self.dp, &mut self.delay.borrow_mut(), &mut buffer);
+        spi_radio_transmit(
+            &mut self.spi.borrow_mut(),
+            &mut self.delay.borrow_mut(),
+            &mut buffer,
+        );
         data.copy_from_slice(&buffer[1..]);
 
         for x in buffer {
