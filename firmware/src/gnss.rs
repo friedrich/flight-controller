@@ -1,13 +1,125 @@
-use cortex_m::{peripheral::itm, iprintln};
+use crate::{spi, Spi};
 use cortex_m::{delay, iprint};
+use cortex_m::{iprintln, peripheral::itm};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
-use crate::{Spi, spi};
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum UbxEncodeError {
     BufferTooSmall,
     PayloadTooBig,
+}
+
+const UBX_SYNC_CHAR_1: u8 = 0xb5;
+const UBX_SYNC_CHAR_2: u8 = 0x62;
+
+fn gnss_transmit(
+    spi: &mut Spi,
+    delay: &mut delay::Delay,
+    stim: &mut itm::Stim,
+    message_type: UbxMessageType,
+    payload: &[u8],
+    buffer: &mut [u8],
+) -> Result<(), UbxEncodeError> {
+    spi.activate_peripheral(spi::Peripheral::Gnss, delay);
+
+    let len = ubx_encode(message_type, payload, buffer)?.len();
+    buffer[len..].fill(0xff);
+
+    for x in buffer {
+        spi.write(*x);
+        *x = spi.read();
+    }
+
+    Ok(())
+}
+
+enum ParseState {
+    Idle,
+    Ubx(usize),
+    Nmea,
+}
+
+fn gnss_parse(stim: &mut itm::Stim, data: &[u8]) {
+    let mut state = ParseState::Idle;
+    let mut message_start = 0;
+    let mut message_type_id = 0;
+    let mut message_size = 0;
+
+    for pos in 0..data.len() {
+        let x = data[pos];
+        let peek = data.get(pos + 1).cloned().unwrap_or(0xff);
+
+        match state {
+            ParseState::Idle => {
+                if x == UBX_SYNC_CHAR_1 && peek == UBX_SYNC_CHAR_2 {
+                    message_start = pos;
+                    message_size = 0;
+
+                    // iprintln!(stim, "UBX message start at {}", pos);
+                    state = ParseState::Ubx(1);
+                } else if x == '$' as u8 {
+                    message_start = pos;
+
+                    // iprintln!(stim, "NMEA message start at {}", pos);
+                    state = ParseState::Nmea;
+                }
+            }
+            ParseState::Ubx(pos_in_message) => {
+                if pos_in_message == message_size - 1 {
+                    let message = &data[message_start..=pos];
+                    iprint!(stim, "UBX message at {}: ", message_start);
+
+                    match UbxMessageType::from_u16(message_type_id) {
+                        Some(UbxMessageType::CfgNmea) => {
+                            iprintln!(stim, "NMEA config");
+                        }
+                        Some(UbxMessageType::AckAck) => {
+                            iprintln!(stim, "ack");
+                        }
+                        Some(UbxMessageType::AckNak) => {
+                            iprintln!(stim, "nack");
+                        }
+                        Some(UbxMessageType::CfgPrt) => {
+                            iprintln!(stim, "port config");
+                        }
+                        _ => {
+                            iprintln!(stim, "unknown message {:04x}", message_type_id);
+                        }
+                    }
+
+                    state = ParseState::Idle;
+                    continue;
+                }
+
+                if pos_in_message == 5 {
+                    message_type_id = u16::from(data[message_start + 2]) << 8
+                        | u16::from(data[message_start + 3]);
+                    message_size = usize::from(data[message_start + 5]) << 8
+                        | usize::from(data[message_start + 4]) + 8;
+                }
+
+                state = ParseState::Ubx(pos_in_message + 1);
+            }
+            ParseState::Nmea => {
+                if x == '\n' as u8 {
+                    let message = &data[message_start..=pos - 2];
+                    match core::str::from_utf8(message) {
+                        Ok(text) => iprintln!(stim, "NMEA message at {}: {}", message_start, text),
+                        Err(e) => iprintln!(
+                            stim,
+                            "invalid NMEA message at {}: {:02x?} {}",
+                            message_start,
+                            message,
+                            e
+                        ),
+                    }
+
+                    state = ParseState::Idle;
+                }
+            }
+        }
+    }
 }
 
 fn ubx_encode<'a>(
@@ -21,8 +133,8 @@ fn ubx_encode<'a>(
 
     let ret = buffer.get_mut(0..payload.len() + 8).ok_or(UbxEncodeError::BufferTooSmall)?;
 
-    ret[0] = 0xb5;
-    ret[1] = 0x62;
+    ret[0] = UBX_SYNC_CHAR_1;
+    ret[1] = UBX_SYNC_CHAR_2;
     ret[2] = (message_type as u16 >> 8) as u8;
     ret[3] = message_type as u8;
     ret[4] = payload.len() as u8;
@@ -60,161 +172,12 @@ enum UbxMessageType {
     MonMsgpp = 0x0a06,
 }
 
-fn spi_gnss_transmit(
-    spi: &mut Spi,
-    stim: &mut itm::Stim,
-    delay: &mut delay::Delay,
-    message_type: UbxMessageType,
-    payload: &[u8],
-    ret: &mut [u8],
-) -> usize {
-    spi.activate_peripheral(spi::Peripheral::Gnss, delay);
-
-    let mut buffer = [0; 2560];
-    let data = ubx_encode(message_type, payload, &mut buffer).unwrap();
-
-    // for x in data_send.iter() {
-    //     iprint!(stim, "{:02x} ", x);
-    // }
-    // iprintln!(stim, "");
-
-    let mut size = 0;
-
-    let mut state = GnssReceiveState::Idle;
-    let mut message_size = 0;
-    let mut message_type_number = 0;
-
-    let mut blub = 0;
-    loop {
-        // for i in 0..ret.len() {
-        if blub == 0 {
-            iprintln!(stim, "sending...");
-        } else if blub == data.len() {
-            iprintln!(stim, "sending complete");
-        }
-
-        let y = data.get(blub).cloned().unwrap_or(0xff);
-        spi.write(y);
-        let x = spi.read();
-
-        // iprintln!(stim, "out={:02x} in={:02x}", y, x);
-
-        let prev_state = state;
-
-        match state {
-            GnssReceiveState::Idle => {
-                if x == 0xb5 {
-                    ret[0] = x;
-                    state = GnssReceiveState::UbxMessage(1);
-                } else if x == '$' as u8 {
-                    state = GnssReceiveState::NmeaMessage;
-                    iprintln!(stim, "NMEA Message");
-                }
-            }
-            GnssReceiveState::UbxMessage(i) => {
-                // iprintln!(stim, "i={}", i);
-                // iprintln!(stim, "{}", i - message_size as usize + 1);
-                if i >= ret.len() {
-                    iprintln!(stim, "message too long {:?}", &ret[0..i]);
-                    state = GnssReceiveState::Idle;
-                } else {
-                    ret[i] = x;
-                    state = GnssReceiveState::UbxMessage(i + 1);
-                    if i == 5 {
-                        if ret[0] == 0xb5 && ret[1] == 0x62 {
-                            message_type_number = u16::from(ret[2]) << 8 | u16::from(ret[3]);
-                            message_size = u16::from(ret[5]) << 8 | u16::from(ret[4]) + 8;
-                            // iprintln!(stim, "message length: {}", message_size);
-                        } else {
-                            state = GnssReceiveState::Idle;
-                            iprintln!(stim, "invalid message {:?}", &ret[0..i + 1]);
-                        }
-                    } else if i > 5 && i == message_size as usize - 1 {
-                        state = GnssReceiveState::Idle;
-
-                        match UbxMessageType::from_u16(message_type_number) {
-                            Some(UbxMessageType::CfgNmea) => {
-                                iprintln!(
-                                    stim,
-                                    "config message: {:?}",
-                                    &ret[0..message_size as usize]
-                                );
-                            }
-                            Some(UbxMessageType::AckAck) => {
-                                iprintln!(
-                                    stim,
-                                    "ack message: {:?}",
-                                    &ret[0..message_size as usize]
-                                );
-                            }
-                            Some(UbxMessageType::AckNak) => {
-                                iprintln!(
-                                    stim,
-                                    "nack message: {:?}",
-                                    &ret[0..message_size as usize]
-                                );
-                            }
-                            Some(UbxMessageType::CfgPrt) => {
-                                iprintln!(
-                                    stim,
-                                    "port config message: {:02x?}",
-                                    &ret[0..message_size as usize]
-                                );
-                            }
-                            _ => {
-                                iprintln!(stim, "unknown message: {:04x}", message_type_number);
-                            }
-                        }
-                        // ret[2] = (message_type as u16 >> 8) as u8;
-                        // ret[3] = message_type as u8;
-                    }
-                }
-            }
-            GnssReceiveState::NmeaMessage => {
-                if x == 0xff || x == '\n' as u8 {
-                    // TODO: should 0xff lead to idle here as well?
-                    state = GnssReceiveState::Idle;
-                }
-            }
-        }
-
-        if state != prev_state {
-            if let GnssReceiveState::UbxMessage(_) = prev_state {
-                // iprintln!(stim, "{:?}", ret);
-            } else {
-                // iprintln!(stim, "{:?}", state);
-            }
-        }
-
-        // if i >= ret.len() && x == 0xff {
-        //     break;
-        // }
-        ret.get_mut(blub).and_then(|v| {
-            *v = x;
-            None::<()>
-        });
-        if x != 0xff {
-            size = blub;
-        }
-
-        blub += 1;
-        if blub == 100000 {
-            blub = 0;
-        }
-    }
-
-    if let GnssReceiveState::UbxMessage(_) = state {
-        iprintln!(stim, "{:?}", ret);
-    }
-
-    size
-}
-
 pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
     iprintln!(stim, "GNSS");
 
     loop {
-        let mut ret = [0; 256];
+        let mut data = [0; 1024];
+        gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
         // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
         // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[], &mut ret);
         // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[
@@ -230,7 +193,7 @@ pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm
         //     0x00, // msgID
         //     0x00, // rate
         // ], &mut ret);
-        let size = spi_gnss_transmit(spi, stim, delay, UbxMessageType::CfgPrt, &[0x04], &mut ret);
+        // let size = spi_gnss_transmit(spi, stim, delay, UbxMessageType::CfgPrt, &[0x04], &mut ret);
         // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgPrt, &[
         //     0x04, // port id
         //     0x00, // reserved
@@ -250,12 +213,13 @@ pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm
         //     0, 0 // reserved
         // ], &mut ret);
 
-        let ret = &ret[0..size];
-        if !ret.is_empty() {
-            for x in ret {
-                iprint!(stim, "{}", *x as char);
-            }
-            iprintln!(stim, "\n-----");
-        }
+        // let ret = &ret[0..size];
+        // if !ret.is_empty() {
+        //     for x in ret {
+        //         iprint!(stim, "{}", *x as char);
+        //     }
+        //     iprintln!(stim, "\n-----");
+        // }
+        gnss_parse(stim, &data);
     }
 }

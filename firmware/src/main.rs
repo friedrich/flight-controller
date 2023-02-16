@@ -2,9 +2,9 @@
 #![no_main]
 #![allow(unreachable_code, unused)] // TODO: remove!
 
+mod gnss;
 mod radio_hal;
 mod spi;
-mod gnss;
 
 use core::cell::RefCell;
 use cortex_m::delay;
@@ -18,8 +18,8 @@ use radio_hal::RadioHal;
 use radio_sx128x::base::Hal;
 use spi::Spi;
 use stm32g4::stm32g4a1 as pac;
-use stm32g4::stm32g4a1::{gpioa, gpiob};
 use stm32g4::stm32g4a1::syscfg::swpr::PAGE0_WP_R;
+use stm32g4::stm32g4a1::{gpioa, gpiob};
 
 const HSI16_CLOCK_FREQUENCY: u32 = 16_000_000;
 const AHB_CLOCK_FREQUENCY: u32 = HSI16_CLOCK_FREQUENCY;
@@ -334,19 +334,6 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
 //     print_response(stim, "SetPacketParams", &data);
 
 //     // ....
-// }
-
-// struct UbxMessage {
-//     message_type: UbxMessageType,
-//     payload: &[u8],
-// }
-
-// fn gnss_transmit(
-//     dp: &pac::Peripherals,
-//     stim: &mut itm::Stim,
-//     messages: &[UbxMessage],
-//     read_length: usize) {
-
 // }
 
 fn init_radio<'a>(
