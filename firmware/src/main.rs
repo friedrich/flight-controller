@@ -348,29 +348,32 @@ fn main() -> ! {
     let mut cp = cortex_m::Peripherals::take().unwrap();
     let dp = pac::Peripherals::take().unwrap();
 
+    // initialize LEDs early to get some feedback
+    init_led(&dp);
+    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
+
     pull_up_unconnected_pins(&dp);
 
     let stim = RefCell::new(&mut cp.ITM.stim[0]);
     let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
-
-    init_led(&dp);
     let mut spi = RefCell::new(Spi::new(&dp));
 
-    led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
-
+    iprint!(&mut stim.borrow_mut(), "waiting for radio... ");
     init_radio(&mut spi.borrow_mut(), &delay, &stim);
+    iprintln!(&mut stim.borrow_mut(), "done");
 
     led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
 
     // wait for accelerometer to become available
-    iprintln!(&mut stim.borrow_mut(), "waiting for accelerometer...");
+    iprint!(&mut stim.borrow_mut(), "waiting for accelerometer... ");
     while accel_read(&mut spi.borrow_mut(), &mut delay.borrow_mut(), 0x0f) != 0x6b {
         delay.borrow_mut().delay_ms(1);
     }
+    iprintln!(&mut stim.borrow_mut(), "done");
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
 
-    radio(&spi, &delay, &stim);
+    radio(&dp, &spi, &delay, &stim);
     // accel(&mut spi.borrow_mut(), &dp, &delay, &stim);
 
     gnss::gnss(

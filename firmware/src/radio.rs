@@ -1,11 +1,12 @@
 use core::cell::RefCell;
-
 use cortex_m::{delay, iprintln, peripheral::itm};
 use radio::Transmit;
 
 use crate::{
+    led, pac,
     radio_hal::RadioHal,
     spi::{self, Spi},
+    LED_COUNTER_PERIOD,
 };
 
 pub fn spi_radio_transmit(spi: &mut Spi, delay: &mut delay::Delay, data: &mut [u8]) {
@@ -68,56 +69,26 @@ pub fn init_radio<'a>(
     delay: &'a RefCell<delay::Delay>,
     stim: &'a RefCell<&'a mut itm::Stim>,
 ) {
-    // loop {
-    //     let mut data = [0x80, 0x00];
-    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-    //     if data[0] & 0b11111100 == 0b01000100 {
-    //         led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
-    //     } else {
-    //         led(&dp, LED_COUNTER_PERIOD / 2, 0, 0);
-    //     }
-    //     delay.borrow_mut().delay_ms(10);
-    // }
-
-    // // wait for radio to become available
-    // loop {
-    //     let mut data = [0xc0, 0]; // GetStatus
-    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
-    //     print_response(stim, "GetStatus", &data);
-    //     if data[1] & 0b00011100 ==  {
-    //         iprintln!(&mut stim.borrow_mut(), "radio firmware: 0x{:04x}", firmware);
-    //         break;
-    //     }
-
-    //     delay.delay_ms(10); // not necessary
-    // }
-
     // wait for radio to become available
-    iprintln!(&mut stim.borrow_mut(), "waiting for radio...");
-    let mut success_count = 0;
+    // let mut success_count = 0;
     loop {
         let mut data = [0x80, 0x00];
         spi_radio_transmit(spi, &mut delay.borrow_mut(), &mut data);
         if data[0] & 0b11111100 == 0b01000100 {
-            // let address: u16 = 0x0153;
-            // let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
-            // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-            // print_response1(&mut stim.borrow_mut(), data[0]);
-            // let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
-            // if firmware & 0xff00 == 0xa900 && (data[0] >> 2) & 0x7 != 0x7 {
-            success_count += 1;
-            if success_count == 10 {
-                // iprintln!(&mut stim.borrow_mut(), "SX128x firmware: {:04x}", firmware);
-                break;
-            }
-        } else {
-            success_count = 0;
-        }
-        delay.borrow_mut().delay_ms(10);
+            break;
+            // success_count += 1;
+            // if success_count == 10 {
+            //     break;
+            // }
+        } // else {
+          //     success_count = 0;
+          // }
+        delay.borrow_mut().delay_ms(1);
     }
 }
 
 pub fn radio<'a>(
+    dp: &'a pac::Peripherals,
     spi: &'a RefCell<Spi<'a>>,
     delay: &'a RefCell<delay::Delay>,
     stim: &'a RefCell<&'a mut itm::Stim>,
@@ -145,30 +116,6 @@ pub fn radio<'a>(
 
     //     delay.delay_ms(10); // not necessary
     // }
-
-    // wait for radio to become available
-    iprintln!(&mut stim.borrow_mut(), "waiting for radio...");
-    let mut success_count = 0;
-    loop {
-        let mut data = [0x80, 0x00];
-        spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-        if data[0] & 0b11111100 == 0b01000100 {
-            // let address: u16 = 0x0153;
-            // let mut data = [0x19, (address >> 8) as u8, address as u8, 0, 0, 0];
-            // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-            // print_response1(&mut stim.borrow_mut(), data[0]);
-            // let firmware = u16::from(data[4]) << 8 | u16::from(data[5]);
-            // if firmware & 0xff00 == 0xa900 && (data[0] >> 2) & 0x7 != 0x7 {
-            success_count += 1;
-            if success_count == 10 {
-                // iprintln!(&mut stim.borrow_mut(), "SX128x firmware: {:04x}", firmware);
-                break;
-            }
-        } else {
-            success_count = 0;
-        }
-        delay.borrow_mut().delay_ms(10);
-    }
 
     // led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
     // delay.borrow_mut().delay_ms(100);
@@ -205,7 +152,12 @@ pub fn radio<'a>(
     // radio.calibrate(radio_sx128x::device::CalibrationParams::all()).unwrap();
     // delay.borrow_mut().delay_ms(100);
     let data = [1, 2, 3];
-    radio.start_transmit(&data).unwrap();
+
+    match radio.start_transmit(&data) {
+        Ok(_) => led(&dp, 0, 0, LED_COUNTER_PERIOD / 2),
+        Err(_) => led(&dp, LED_COUNTER_PERIOD / 2, 0, LED_COUNTER_PERIOD / 2),
+    }
+
     loop {}
 
     // self.set_regulator_mode(config.regulator_mode)?;
