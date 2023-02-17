@@ -34,6 +34,22 @@ fn gnss_transmit(
     Ok(())
 }
 
+fn gnss_receive(
+    spi: &mut Spi,
+    delay: &mut delay::Delay,
+    stim: &mut itm::Stim,
+    buffer: &mut [u8],
+) -> Result<(), UbxEncodeError> {
+    spi.activate_peripheral(spi::Peripheral::Gnss, delay);
+
+    for x in buffer {
+        spi.write(0xff);
+        *x = spi.read();
+    }
+
+    Ok(())
+}
+
 enum ParseState {
     Idle,
     Ubx(usize),
@@ -68,11 +84,12 @@ fn gnss_parse(stim: &mut itm::Stim, data: &[u8]) {
             ParseState::Ubx(pos_in_message) => {
                 if pos_in_message == message_size - 1 {
                     let message = &data[message_start..=pos];
+                    let payload = &message[6..message.len() - 2];
                     iprint!(stim, "UBX message at {}: ", message_start);
 
                     match UbxMessageType::from_u16(message_type_id) {
                         Some(UbxMessageType::CfgNmea) => {
-                            iprintln!(stim, "NMEA config");
+                            iprintln!(stim, "NMEA config: {:02x?}", payload);
                         }
                         Some(UbxMessageType::AckAck) => {
                             iprintln!(stim, "ack");
@@ -81,7 +98,10 @@ fn gnss_parse(stim: &mut itm::Stim, data: &[u8]) {
                             iprintln!(stim, "nack");
                         }
                         Some(UbxMessageType::CfgPrt) => {
-                            iprintln!(stim, "port config");
+                            iprintln!(stim, "port config: {:02x?}", payload);
+                        }
+                        Some(UbxMessageType::CfgMsg) => {
+                            iprintln!(stim, "message rate: {:02x?}", payload);
                         }
                         _ => {
                             iprintln!(stim, "unknown message {:04x}", message_type_id);
@@ -115,6 +135,9 @@ fn gnss_parse(stim: &mut itm::Stim, data: &[u8]) {
                         ),
                     }
 
+                    state = ParseState::Idle;
+                } else if x == 0xff {
+                    iprintln!(stim, "interrupted NMEA message");
                     state = ParseState::Idle;
                 }
             }
@@ -165,9 +188,10 @@ enum GnssReceiveState {
 enum UbxMessageType {
     AckAck = 0x0501,
     AckNak = 0x0500,
-    CfgPrt = 0x0600,
     CfgMsg = 0x0601,
     CfgNmea = 0x0617,
+    CfgPrt = 0x0600,
+    CfgRate = 0x0608,
     LogInfo = 0x2108,
     MonMsgpp = 0x0a06,
 }
@@ -175,51 +199,67 @@ enum UbxMessageType {
 pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
     iprintln!(stim, "GNSS");
 
-    loop {
-        let mut data = [0; 1024];
-        gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
-        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
-        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[], &mut ret);
-        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[
-        //     0x00, // filter (default 0x00)
-        //     0x40, // nmeaVersion
-        //     0x00, // numSV
-        //     0x02, // flags (default: 0x02)
-        //     0, 0, 0, 0, 0, 0, 0,
-        //     0x01, // message version
-        //     0, 0, 0, 0, 0, 0, 0, 0], &mut ret);
-        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgMsg, &[
-        //     0x00, // msgClass
-        //     0x00, // msgID
-        //     0x00, // rate
-        // ], &mut ret);
-        // let size = spi_gnss_transmit(spi, stim, delay, UbxMessageType::CfgPrt, &[0x04], &mut ret);
-        // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgPrt, &[
-        //     0x04, // port id
-        //     0x00, // reserved
-        //     0x00, // tx ready
-        //     0x00, // tx ready
-        //     0x00, // SPI mode
-        //     0x32, // SPI mode (default 0x32)
-        //     0x00, // SPI mode
-        //     0x00, // SPI mode
-        //     0, 0, 0, 0, // reserved
-        //     0b00000011, // inProtoMask (default 0b00000111)
-        //     0b00000000, // inProtoMask (default 0b00000000)
-        //     0b00000011, // outProtoMask (default 0b00000011)
-        //     0b00000000, // outProtoMask (default 0b00000000)
-        //     0x00, // flags
-        //     0x00, // flags
-        //     0, 0 // reserved
-        // ], &mut ret);
+    let mut data = [0; 1024];
 
-        // let ret = &ret[0..size];
-        // if !ret.is_empty() {
-        //     for x in ret {
-        //         iprint!(stim, "{}", *x as char);
-        //     }
-        //     iprintln!(stim, "\n-----");
-        // }
+    // disable recurrent NMEA messages
+    for i in 0x00..=0x05 {
+        gnss_transmit(
+            spi,
+            delay,
+            stim,
+            UbxMessageType::CfgMsg,
+            &[0xf0, i, 0],
+            &mut data,
+        );
+    }
+
+    // gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
+    // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
+    // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::CfgNmea, &[], &mut ret);
+    // let size = gnss_transmit(spi, delay, stim, UbxMessageType::CfgNmea, &[
+    //     0x00, // filter (default 0x00)
+    //     0x40, // nmeaVersion
+    //     0x00, // numSV
+    //     0x0a, // flags (default: 0x02)
+    //     0, 0, 0, 0, 0, 0, 0,
+    //     0x01, // message version
+    //     0, 0, 0, 0, 0, 0, 0, 0], &mut data);
+    // let size = gnss_transmit(spi, delay, stim, UbxMessageType::CfgMsg, &[
+    //     0xf0, // msgClass
+    //     0x0a, // msgID
+    //     0x00, // rate
+    // ], &mut data);
+    // let size = gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[
+    //     0x04, // port id
+    //     0x00, // reserved
+    //     0x00, // tx ready
+    //     0x00, // tx ready
+    //     0x00, // SPI mode
+    //     0x32, // SPI mode (default 0x32)
+    //     0x00, // SPI mode
+    //     0x00, // SPI mode
+    //     0, 0, 0, 0, // reserved
+    //     0b00000111, // inProtoMask (default 0b00000111)
+    //     0b00000000, // inProtoMask (default 0b00000000)
+    //     0b00000011, // outProtoMask (default 0b00000011)
+    //     0b00000000, // outProtoMask (default 0b00000000)
+    //     0x00, // flags
+    //     0x00, // flags
+    //     0, 0 // reserved
+    // ], &mut data);
+    // let size = gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
+    // let size = gnss_transmit(
+    //     spi,
+    //     delay,
+    //     stim,
+    //     UbxMessageType::CfgRate,
+    //     &[25, 0, 1, 0, 0, 0],
+    //     &mut data,
+    // );
+    gnss_parse(stim, &data);
+
+    loop {
+        let size = gnss_receive(spi, delay, stim, &mut data);
         gnss_parse(stim, &data);
     }
 }
