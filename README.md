@@ -17,6 +17,7 @@
   - ...?
 - Print version number on the PCB.
 - Remove small compenents slik screen labels.
+- Make it possible to manually pull up the BOOT0 pin in case the firmware disrupts SWD communication.
 
 TODO: check if MAIN_SENSE and TAIL_SENSE work!
 
