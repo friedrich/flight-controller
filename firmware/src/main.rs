@@ -212,10 +212,8 @@ fn accel_read_multiple(spi: &mut Spi, delay: &mut delay::Delay, address: u8, dat
     spi.write(1 << 7 | address);
     spi.read();
 
-    for x in data {
-        spi.write(0);
-        *x = spi.read();
-    }
+    data.fill(0);
+    spi.transfer(data);
 
     // 20 ns needed before clock goes high - TODO: make this nicer
     cortex_m::asm::nop();
@@ -276,14 +274,7 @@ fn read_accelerometer_data(spi: &mut Spi, delay: &mut delay::Delay) -> Accelerom
 
 fn spi_radio_transmit(spi: &mut Spi, delay: &mut delay::Delay, data: &mut [u8]) {
     spi.activate_peripheral(spi::Peripheral::Radio, delay);
-
-    for x in data {
-        spi.write(*x);
-        // hprintln!("out {:02x}", *x);
-        *x = spi.read();
-        // hprintln!("in {:02x}", *x);
-    }
-
+    spi.transfer(data);
     spi.deactivate_peripheral();
 }
 
@@ -683,6 +674,7 @@ fn main() -> ! {
     // accel(&mut spi.borrow_mut(), &dp, &delay, &stim);
 
     gnss::gnss(
+        &dp,
         &mut spi.borrow_mut(),
         &mut delay.borrow_mut(),
         &mut stim.borrow_mut(),

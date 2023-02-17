@@ -102,6 +102,13 @@ impl<'a> Spi<'a> {
         unsafe { ptr::write_volatile(self.dp.SPI1.dr.as_ptr() as *mut u8, value) };
     }
 
+    pub fn transfer(&mut self, data: &mut [u8]) {
+        for x in data {
+            self.write(*x);
+            *x = self.read();
+        }
+    }
+
     fn switch_peripheral(&mut self, peripheral: Peripheral) {
         if self.current_peripheral == Some(peripheral) {
             return;

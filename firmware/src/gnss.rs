@@ -1,4 +1,4 @@
-use crate::{spi, Spi};
+use crate::{pac, spi, Spi};
 use cortex_m::{delay, iprint};
 use cortex_m::{iprintln, peripheral::itm};
 use num_derive::FromPrimitive;
@@ -26,10 +26,7 @@ fn gnss_transmit(
     let len = ubx_encode(message_type, payload, buffer)?.len();
     buffer[len..].fill(0xff);
 
-    for x in buffer {
-        spi.write(*x);
-        *x = spi.read();
-    }
+    spi.transfer(buffer);
 
     Ok(())
 }
@@ -42,10 +39,8 @@ fn gnss_receive(
 ) -> Result<(), UbxEncodeError> {
     spi.activate_peripheral(spi::Peripheral::Gnss, delay);
 
-    for x in buffer {
-        spi.write(0xff);
-        *x = spi.read();
-    }
+    buffer.fill(0xff);
+    spi.transfer(buffer);
 
     Ok(())
 }
@@ -56,7 +51,7 @@ enum ParseState {
     Nmea,
 }
 
-fn gnss_parse(stim: &mut itm::Stim, data: &[u8]) {
+fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
     let mut state = ParseState::Idle;
     let mut message_start = 0;
     let mut message_type_id = 0;
@@ -102,6 +97,38 @@ fn gnss_parse(stim: &mut itm::Stim, data: &[u8]) {
                         }
                         Some(UbxMessageType::CfgMsg) => {
                             iprintln!(stim, "message rate: {:02x?}", payload);
+                        }
+                        Some(UbxMessageType::NavStatus) => {
+                            let itow = u32::from(payload[0])
+                                | u32::from(payload[1]) << 8
+                                | u32::from(payload[2]) << 16
+                                | u32::from(payload[3]) << 24;
+                            let fix = payload[4];
+                            let flags = payload[5];
+                            let fix_stat = payload[6];
+                            let flags2 = payload[7];
+                            let ttff = u32::from(payload[8])
+                                | u32::from(payload[9]) << 8
+                                | u32::from(payload[10]) << 16
+                                | u32::from(payload[11]) << 24;
+                            let msss = u32::from(payload[12])
+                                | u32::from(payload[13]) << 8
+                                | u32::from(payload[14]) << 16
+                                | u32::from(payload[15]) << 24;
+
+                            if fix == 0 {
+                                crate::led(dp, crate::LED_COUNTER_PERIOD / 2, 0, 0);
+                            } else {
+                                crate::led(dp, 0, 0, crate::LED_COUNTER_PERIOD / 2);
+                            }
+
+                            iprintln!(
+                                stim,
+                                "nav status: fix {}, flags {:08b}, time since reset {}",
+                                payload[4],
+                                flags,
+                                msss / 1000
+                            );
                         }
                         _ => {
                             iprintln!(stim, "unknown message {:04x}", message_type_id);
@@ -194,9 +221,10 @@ enum UbxMessageType {
     CfgRate = 0x0608,
     LogInfo = 0x2108,
     MonMsgpp = 0x0a06,
+    NavStatus = 0x0103,
 }
 
-pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
+pub fn gnss<'a>(dp: &'a pac::Peripherals, spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
     iprintln!(stim, "GNSS");
 
     let mut data = [0; 1024];
@@ -212,6 +240,19 @@ pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm
             &mut data,
         );
     }
+
+    gnss_transmit(
+        spi,
+        delay,
+        stim,
+        UbxMessageType::CfgMsg,
+        &[
+            (UbxMessageType::NavStatus as u16 >> 8) as u8,
+            UbxMessageType::NavStatus as u8,
+            1,
+        ],
+        &mut data,
+    );
 
     // gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
     // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
@@ -256,10 +297,9 @@ pub fn gnss<'a>(spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm
     //     &[25, 0, 1, 0, 0, 0],
     //     &mut data,
     // );
-    gnss_parse(stim, &data);
 
     loop {
         let size = gnss_receive(spi, delay, stim, &mut data);
-        gnss_parse(stim, &data);
+        gnss_parse(stim, dp, &data);
     }
 }
