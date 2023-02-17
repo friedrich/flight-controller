@@ -5,7 +5,7 @@ use cortex_m::{delay, iprintln};
 use embedded_hal::digital::PinState;
 use radio_sx128x::base::Hal;
 
-use crate::{print_response1, spi_radio_transmit};
+use crate::radio::{print_response1, spi_radio_transmit};
 
 pub struct RadioHal<'a> {
     pub spi: &'a RefCell<crate::spi::Spi<'a>>,

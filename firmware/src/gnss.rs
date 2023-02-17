@@ -224,7 +224,12 @@ enum UbxMessageType {
     NavStatus = 0x0103,
 }
 
-pub fn gnss<'a>(dp: &'a pac::Peripherals, spi: &'a mut Spi, delay: &'a mut delay::Delay, stim: &'a mut itm::Stim) {
+pub fn gnss<'a>(
+    dp: &'a pac::Peripherals,
+    spi: &'a mut Spi,
+    delay: &'a mut delay::Delay,
+    stim: &'a mut itm::Stim,
+) {
     iprintln!(stim, "GNSS");
 
     let mut data = [0; 1024];
