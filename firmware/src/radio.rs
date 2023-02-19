@@ -226,7 +226,8 @@ pub fn radio<'a>(
 
     // SetPacketParams(...)
     let max_payload_length = 0x00; // 31 bytes
-    let crc = 0x00; // off - TODO?
+    let crc = 0x00; // off - TODO!
+    // let crc = 0x10; // 3 bytes
     let whitening = 0x00; // on
     let mut data = [
         0x8c,
@@ -277,9 +278,6 @@ pub fn radio<'a>(
     // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     // print_response(&mut stim.borrow_mut(), "SetStandby", &data);
 
-    // read_cmd(0xc0, [00])
-    // write_buff(0x00, [01, 02, 03])
-
     // 3. Send the payload to the data buffer by issuing the command
 
     // WriteBuffer(offset, data)
@@ -312,35 +310,43 @@ pub fn radio<'a>(
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetDioIrqParams", &data);
 
-    // // clear IRQ status. TODO: correct mask?
-    // let mut data = [0x97, 0xff, 0xff];
-    // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-    // iprintln!(&mut stim.borrow_mut(), "response: {:?}", data);
-
-    // 5. Once configured, set the transceiver in transmitter mode to start transmission
-
-    // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
-    let timeout_period_base = 0x00; // 15.625 μs
-    let timeout_period_count = 0;
-    let mut data = [
-        0x83,
-        0x00,
-        (timeout_period_count >> 8) as u8,
-        timeout_period_count as u8,
-    ];
-    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-    print_response(&mut stim.borrow_mut(), "SetTx", &data);
-
-    // 6. Optionally check the packet status to make sure that the packet has been sent properly
-
     loop {
-        // GetPacketStatus()
-        let mut data = [0x1d, 0, 0, 0, 0, 0, 0];
+        // 5. Once configured, set the transceiver in transmitter mode to start transmission
+
+        // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
+        let timeout_period_base = 0x00; // 15.625 μs
+        let timeout_period_count = 0;
+        let mut data = [
+            0x83,
+            0x00,
+            (timeout_period_count >> 8) as u8,
+            timeout_period_count as u8,
+        ];
         spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-        print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
+        print_response(&mut stim.borrow_mut(), "SetTx", &data);
+
+        // 6. Optionally check the packet status to make sure that the packet has been sent properly
+
+        loop {
+            // GetPacketStatus()
+            let mut data = [0x1d, 0, 0, 0, 0, 0, 0];
+            spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
+            let status = data[5];
+            if status == 0x01 {
+                break;
+            }
+            print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
+
+            delay.borrow_mut().delay_ms(100);
+        }
+
+        // 7. Clear TxDone or RxTxTimeout IRQ
+
+        // // ClearIrqStatus()
+        // let mut data = [0x97, 0xff, 0xff]; // TODO
+        // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
+        // print_response(&mut stim.borrow_mut(), "GetIrqStatus", &data);
+
         delay.borrow_mut().delay_ms(1000);
     }
-
-    // 7. Clear TxDone or RxTxTimeout IRQ
-    // TODO!
 }
