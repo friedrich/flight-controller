@@ -1,3 +1,6 @@
+#![allow(clippy::precedence)]
+#![allow(clippy::cast_enum_truncation)]
+
 use crate::{pac, spi, Spi};
 use cortex_m::{delay, iprint};
 use cortex_m::{iprintln, peripheral::itm};
@@ -16,7 +19,6 @@ const UBX_SYNC_CHAR_2: u8 = 0x62;
 fn gnss_transmit(
     spi: &mut Spi,
     delay: &mut delay::Delay,
-    stim: &mut itm::Stim,
     message_type: UbxMessageType,
     payload: &[u8],
     buffer: &mut [u8],
@@ -34,7 +36,6 @@ fn gnss_transmit(
 fn gnss_receive(
     spi: &mut Spi,
     delay: &mut delay::Delay,
-    stim: &mut itm::Stim,
     buffer: &mut [u8],
 ) -> Result<(), UbxEncodeError> {
     spi.activate_peripheral(spi::Peripheral::Gnss, delay);
@@ -69,7 +70,7 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
 
                     // iprintln!(stim, "UBX message start at {}", pos);
                     state = ParseState::Ubx(1);
-                } else if x == '$' as u8 {
+                } else if x == b'$' {
                     message_start = pos;
 
                     // iprintln!(stim, "NMEA message start at {}", pos);
@@ -99,25 +100,30 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
                             iprintln!(stim, "message rate: {:02x?}", payload);
                         }
                         Some(UbxMessageType::NavStatus) => {
-                            let itow = u32::from(payload[0])
-                                | u32::from(payload[1]) << 8
-                                | u32::from(payload[2]) << 16
-                                | u32::from(payload[3]) << 24;
+                            // let itow = u32::from(payload[0])
+                            //     | u32::from(payload[1]) << 8
+                            //     | u32::from(payload[2]) << 16
+                            //     | u32::from(payload[3]) << 24;
                             let fix = payload[4];
                             let flags = payload[5];
-                            let fix_stat = payload[6];
-                            let flags2 = payload[7];
-                            let ttff = u32::from(payload[8])
-                                | u32::from(payload[9]) << 8
-                                | u32::from(payload[10]) << 16
-                                | u32::from(payload[11]) << 24;
+                            // let fix_stat = payload[6];
+                            // let flags2 = payload[7];
+                            // let ttff = u32::from(payload[8])
+                            //     | u32::from(payload[9]) << 8
+                            //     | u32::from(payload[10]) << 16
+                            //     | u32::from(payload[11]) << 24;
                             let msss = u32::from(payload[12])
                                 | u32::from(payload[13]) << 8
                                 | u32::from(payload[14]) << 16
                                 | u32::from(payload[15]) << 24;
 
                             if fix == 0 {
-                                crate::led(dp, crate::LED_COUNTER_PERIOD / 2, 0, crate::LED_COUNTER_PERIOD / 2);
+                                crate::led(
+                                    dp,
+                                    crate::LED_COUNTER_PERIOD / 2,
+                                    0,
+                                    crate::LED_COUNTER_PERIOD / 2,
+                                );
                             } else {
                                 crate::led(dp, 0, 0, crate::LED_COUNTER_PERIOD / 2);
                             }
@@ -149,7 +155,7 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
                 state = ParseState::Ubx(pos_in_message + 1);
             }
             ParseState::Nmea => {
-                if x == '\n' as u8 {
+                if x == b'\n' {
                     let message = &data[message_start..=pos - 2];
                     match core::str::from_utf8(message) {
                         Ok(text) => iprintln!(stim, "NMEA message at {}: {}", message_start, text),
@@ -204,13 +210,6 @@ fn ubx_encode<'a>(
     Ok(ret)
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq)]
-enum GnssReceiveState {
-    Idle,
-    UbxMessage(usize),
-    NmeaMessage,
-}
-
 #[derive(Debug, Copy, Clone, PartialEq, Eq, FromPrimitive)]
 enum UbxMessageType {
     AckAck = 0x0501,
@@ -236,20 +235,12 @@ pub fn gnss<'a>(
 
     // disable recurrent NMEA messages
     for i in 0x00..=0x05 {
-        gnss_transmit(
-            spi,
-            delay,
-            stim,
-            UbxMessageType::CfgMsg,
-            &[0xf0, i, 0],
-            &mut data,
-        );
+        gnss_transmit(spi, delay, UbxMessageType::CfgMsg, &[0xf0, i, 0], &mut data).unwrap();
     }
 
     gnss_transmit(
         spi,
         delay,
-        stim,
         UbxMessageType::CfgMsg,
         &[
             (UbxMessageType::NavStatus as u16 >> 8) as u8,
@@ -257,7 +248,8 @@ pub fn gnss<'a>(
             1,
         ],
         &mut data,
-    );
+    )
+    .unwrap();
 
     // gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
     // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
@@ -304,7 +296,7 @@ pub fn gnss<'a>(
     // );
 
     loop {
-        let size = gnss_receive(spi, delay, stim, &mut data);
+        gnss_receive(spi, delay, &mut data).unwrap();
         gnss_parse(stim, dp, &data);
     }
 }

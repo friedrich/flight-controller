@@ -1,41 +1,26 @@
 use core::cell::RefCell;
 use cortex_m::{delay, iprintln, peripheral::itm};
-use cortex_m_semihosting::hprintln;
-use num_traits::float::FloatCore;
-use radio::Transmit;
 
 const BLE_FREQUENCY_CH37: u32 = 2_402_000_000;
+#[allow(unused)]
 const BLE_FREQUENCY_CH38: u32 = 2_426_000_000;
+#[allow(unused)]
 const BLE_FREQUENCY_CH39: u32 = 2_480_000_000;
 
-// https://devzone.nordicsemi.com/cfs-file/__key/communityserver-discussions-components-files/4/6064.bluetoothLEAdvertisingPresentation.pdf
+#[allow(unused)]
 const ADV_IND: u8 = 0b0000;
+#[allow(unused)]
 const ADV_DIRECT_IND: u8 = 0b0001;
 const ADV_NONCONN_IND: u8 = 0b0010;
+#[allow(unused)]
 const ADV_SCAN_IND: u8 = 0b0110;
 
-// TODO: check these constants!
-const SCAN_REQ: u8 = 0b0011;
-const SCAN_RESP: u8 = 0b0100;
-const CONNECT_IND: u8 = 0b0101;
-
-use crate::{
-    led, pac,
-    radio_hal::RadioHal,
-    spi::{self, Spi},
-    LED_COUNTER_PERIOD,
-};
+use crate::spi::{self, Spi};
 
 pub fn spi_radio_transmit(spi: &mut Spi, delay: &mut delay::Delay, data: &mut [u8]) {
     spi.activate_peripheral(spi::Peripheral::Radio, delay);
     spi.transfer(data);
     spi.deactivate_peripheral();
-}
-
-pub fn print_response1(stim: &mut itm::Stim, response: u8) {
-    let circuit = response >> 5;
-    let status = (response >> 2) & 0x7;
-    iprintln!(stim, " - {:x} {:x}", circuit, status);
 }
 
 fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
@@ -45,7 +30,7 @@ fn print_response(stim: &mut itm::Stim, label: &str, data: &[u8]) {
     iprintln!(stim, " - {:x} {:x} - {:02x?}", circuit, status, &data[1..]);
 }
 
-pub fn init_radio<'a>(spi: &mut Spi, delay: &'a RefCell<delay::Delay>) {
+pub fn init_radio(spi: &mut Spi, delay: &RefCell<delay::Delay>) {
     // wait for radio to become available
     // let mut success_count = 0;
     loop {
@@ -65,7 +50,6 @@ pub fn init_radio<'a>(spi: &mut Spi, delay: &'a RefCell<delay::Delay>) {
 }
 
 pub fn radio<'a>(
-    dp: &'a pac::Peripherals,
     spi: &'a RefCell<Spi<'a>>,
     delay: &'a RefCell<delay::Delay>,
     stim: &'a RefCell<&'a mut itm::Stim>,
@@ -227,7 +211,7 @@ pub fn radio<'a>(
     // SetPacketParams(...)
     let max_payload_length = 0x00; // 31 bytes
     let crc = 0x00; // off - TODO!
-    // let crc = 0x10; // 3 bytes
+                    // let crc = 0x10; // 3 bytes
     let whitening = 0x00; // on
     let mut data = [
         0x8c,
@@ -253,7 +237,7 @@ pub fn radio<'a>(
         (magic >> 24) as u8,
         (magic >> 16) as u8,
         (magic >> 8) as u8,
-        (magic >> 0) as u8,
+        magic as u8,
     ];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "WriteRegister", &data);
@@ -318,7 +302,7 @@ pub fn radio<'a>(
         let timeout_period_count = 0;
         let mut data = [
             0x83,
-            0x00,
+            timeout_period_base,
             (timeout_period_count >> 8) as u8,
             timeout_period_count as u8,
         ];

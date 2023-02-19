@@ -4,7 +4,7 @@ use cortex_m::delay;
 
 use crate::pac;
 use crate::pac::{gpioa, gpiob};
-use crate::{pin_mode_alternate, pin_mode_output};
+use crate::{pin_mode_alternate_l, pin_mode_output};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
 pub enum Peripheral {
@@ -38,9 +38,9 @@ impl<'a> Spi<'a> {
         pin_mode_output!(dp.GPIOB, 0, BPushPull, BVeryHighSpeed, true);
 
         // configure SPI pins
-        pin_mode_alternate!(dp.GPIOA, 5, APushPull, AFloating, AVeryHighSpeed, Af5);
-        pin_mode_alternate!(dp.GPIOA, 6, APushPull, AFloating, AVeryHighSpeed, Af5);
-        pin_mode_alternate!(dp.GPIOA, 7, APushPull, AFloating, AVeryHighSpeed, Af5);
+        pin_mode_alternate_l!(dp.GPIOA, 5, APushPull, AFloating, AVeryHighSpeed, Af5);
+        pin_mode_alternate_l!(dp.GPIOA, 6, APushPull, AFloating, AVeryHighSpeed, Af5);
+        pin_mode_alternate_l!(dp.GPIOA, 7, APushPull, AFloating, AVeryHighSpeed, Af5);
 
         // configure SPI
         dp.SPI1.cr1.modify(|_, w| w.rxonly().clear_bit().bidimode().clear_bit()); // full duplex mode
