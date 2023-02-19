@@ -26,6 +26,7 @@
   - Power
   - Signal
   - GND
+- Move motor current sensing away from PF0 and PF1 since they are not connected to any operational amplifiers.
 
 TODO: check if MAIN_SENSE and TAIL_SENSE work!
 
