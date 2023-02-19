@@ -2,6 +2,7 @@
 #![no_main]
 
 mod gnss;
+mod hal;
 mod imu;
 mod motors;
 mod radio;
@@ -19,42 +20,6 @@ use stm32g4::stm32g4a1::{gpioa, gpiob};
 const HSI16_CLOCK_FREQUENCY: u32 = 16_000_000;
 const AHB_CLOCK_FREQUENCY: u32 = HSI16_CLOCK_FREQUENCY;
 const LED_COUNTER_PERIOD: u32 = 16_000;
-
-#[macro_export]
-macro_rules! pin_mode_input {
-    ($gpio:expr, $num:literal, $pull:expr) => {
-        paste::paste! {
-            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().variant($pull));
-            $gpio.moder.modify(|_, w| w.[<moder $num>]().input());
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! pin_mode_output {
-    ($gpio:expr, $num:literal, $type:expr, $speed:expr, $state:expr) => {
-        paste::paste! {
-            $gpio.ospeedr.modify(|_, w| w.[<ospeedr $num>]().variant($speed));
-            $gpio.otyper.modify(|_, w| w.[<ot $num>]().variant($type));
-            $gpio.odr.modify(|_, w| w.[<odr $num>]().bit($state));
-            $gpio.moder.modify(|_, w| w.[<moder $num>]().output());
-            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().floating());
-        }
-    };
-}
-
-#[macro_export]
-macro_rules! pin_mode_alternate_l {
-    ($gpio:expr, $num:literal, $type:expr, $pull:expr, $speed:expr, $alt:expr) => {
-        paste::paste! {
-            $gpio.afrl.modify(|_, w| w.[<afrl $num>]().variant($alt));
-            $gpio.ospeedr.modify(|_, w| w.[<ospeedr $num>]().variant($speed));
-            $gpio.otyper.modify(|_, w| w.[<ot $num>]().variant($type));
-            $gpio.moder.modify(|_, w| w.[<moder $num>]().alternate());
-            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().variant($pull));
-        }
-    };
-}
 
 fn init_led(dp: &pac::Peripherals) {
     use gpiob::afrl::AFRL0_A::{Af10, Af2};
