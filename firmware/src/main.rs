@@ -362,8 +362,8 @@ fn main() -> ! {
     // reset in order for it to detect SPI communication and not to switch to
     // UART and disturbe the SPI bus. This is currently only achieved when
     // compiling in release mode.
-    init_radio(&mut spi.borrow_mut(), &delay);
-    iprintln!(&mut stim.borrow_mut(), "radio found");
+    // init_radio(&mut spi.borrow_mut(), &delay);
+    // iprintln!(&mut stim.borrow_mut(), "radio found");
 
     led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
 
@@ -374,7 +374,7 @@ fn main() -> ! {
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
 
-    radio(&dp, &spi, &delay, &stim);
+    // radio(&dp, &spi, &delay, &stim);
     // accel(&mut spi.borrow_mut(), &dp, &delay, &stim);
 
     gnss::gnss(
