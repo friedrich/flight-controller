@@ -8,6 +8,17 @@ const BLE_FREQUENCY_CH37: u32 = 2_402_000_000;
 const BLE_FREQUENCY_CH38: u32 = 2_426_000_000;
 const BLE_FREQUENCY_CH39: u32 = 2_480_000_000;
 
+// https://devzone.nordicsemi.com/cfs-file/__key/communityserver-discussions-components-files/4/6064.bluetoothLEAdvertisingPresentation.pdf
+const ADV_IND: u8 = 0b0000;
+const ADV_DIRECT_IND: u8 = 0b0001;
+const ADV_NONCONN_IND: u8 = 0b0010;
+const ADV_SCAN_IND: u8 = 0b0110;
+
+// TODO: check these constants!
+const SCAN_REQ: u8 = 0b0011;
+const SCAN_RESP: u8 = 0b0100;
+const CONNECT_IND: u8 = 0b0101;
+
 use crate::{
     led, pac,
     radio_hal::RadioHal,
@@ -150,6 +161,10 @@ pub fn radio<'a>(
     // Then we call the calibration function:
     // Radio.Calibrate( calibParam );
 
+    // common transceiver settings
+
+    // 1. If not in STDBY_RC mode, then go to this mode
+
     // SetStandby(STDBY_RC)
     let mut data = [0x80, 0x00];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
@@ -172,75 +187,128 @@ pub fn radio<'a>(
     //     }
     // }
 
-    //     // SetRfFrequency(rfFrequency)
-    //     let mut data = [0x86, 0xB8, 0x9D, 0x89]; // TODO: this frequency is probably incorrect
-    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
-    //     print_response(stim, "SetRfFrequency", &data);
-
-    //     // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
-    //     let mut data = [0x8F, 0x80, 0x00];
-    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
-    //     print_response(stim, "SetBufferBaseAddress", &data);
-
-    //     // SetModulationParams(BLE_BR_1_000_BW_1_2, MOD_IND_0_5, BT_0_5)
-    //     let mut data = [0x8B, 0x45, 0x01, 0x20];
-    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
-    //     print_response(stim, "SetModulationParams", &data);
-
-    //     // SetPacketParams(packetParam[0], packetParam[1], packetParam[2], packetParam[3])
-    //     // Although this command can accept up to 7 arguments, in BLE mode SetPacketParams can accept only 4. However the 3 remaining arguments must be set to 0 and sent to the radio.
-    //     let mut data = [0x8C, ...];
-    //     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay, &mut data);
-    //     print_response(stim, "SetPacketParams", &data);
+    // 2. Define BLE packet
 
     // SetPacketType(PACKET_TYPE_BLE)
-    //     let mut data = [0x8a, 0x04];
-    // SetPacketType(PACKET_TYPE_GFSK)
-    let mut data = [0x8a, 0x00];
+    let mut data = [0x8a, 0x04];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetPacketType", &data);
 
+    // 3. Define the RF frequency
+
     // SetRfFrequency(rfFrequency)
-    // let frequency = BLE_FREQUENCY_CH37;
-    // let arg: u64 = u64::from(frequency) * 1024 / 203125;
-    // let mut data = [0x86, (arg >> 16) as u8, (arg >> 8) as u8, arg as u8];
-    let mut data = [0x86, 0xbb, 0xb1, 0x3b];
+    let frequency = BLE_FREQUENCY_CH37;
+    let arg: u64 = u64::from(frequency) * 1024 / 203125;
+    let mut data = [0x86, (arg >> 16) as u8, (arg >> 8) as u8, arg as u8];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetRfFrequency", &data);
 
+    // 4. Indicate the addresses where the packet handler will read or write
+
+    const TX_BASE_ADDRESS: u8 = 0x80;
+
     // SetBufferBaseAddress(txBaseAddress, rxBaseAddress)
-    let mut data = [0x8f, 0x80, 0x00];
+    let mut data = [0x8f, TX_BASE_ADDRESS, 0x00];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetBufferBaseAddress", &data);
 
-    // TODO: good values?
-    // SetModulationParams(...)
-    let mut data = [0x8b, 0xc7, 0x00, 0x00];
+    // 5. Define the modulation parameter
+
+    // SetModulationParams(BLE_BR_1_000_BW_1_2, MOD_IND_0_5, BT_0_5)
+    let bitrate_and_bandwidth = 0x45; // 1 Mb/s, 1.2 MHz
+    let modulation_index = 0x01; // 0.5
+    let pulse_shape = 0x20; // 0.5
+    let mut data = [0x8b, bitrate_and_bandwidth, modulation_index, pulse_shape];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetModulationParams", &data);
 
+    // 6. Define the packet parameters
+
     // SetPacketParams(...)
-    let mut data = [0x8c, 0x70, 0x08, 0x10, 0x20, 0x03, 0x00, 0x08];
+    let max_payload_length = 0x00; // 31 bytes
+    let crc = 0x00; // off - TODO?
+    let whitening = 0x00; // on
+    let mut data = [
+        0x8c,
+        max_payload_length,
+        crc,
+        0x00,
+        whitening,
+        0x00,
+        0x00,
+        0x00,
+    ];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetPacketParams", &data);
 
+    // 7. Define the Access Address value
+    // WriteRegister(Sync Address 1 Byte 3 .. Byte 0, 0x8e89bed6)
+    let address = 0x9cf;
+    let magic: u32 = 0x8e89bed6;
+    let mut data = [
+        0x18,
+        (address >> 8) as u8,
+        address as u8,
+        (magic >> 24) as u8,
+        (magic >> 16) as u8,
+        (magic >> 8) as u8,
+        (magic >> 0) as u8,
+    ];
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "WriteRegister", &data);
+
+    // TODO: CRC init?
+
+    // tx settings
+
+    // 1. Define the BLE Access Address accessAddress - already done
+
+    // 2. Define the output power and ramp time
+
     // SetTxParams(power, ramptime)
-    let mut data = [0x8e, 0x1f, 0xe0];
+    let power_param = 31; // tx power = power_param - 18
+    let power_amplifier_ramp_time = 0xe0; // 20 us
+    let mut data = [0x8e, power_param, power_amplifier_ramp_time];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetTxParams", &data);
 
-    // SetStandby(STDBY_RC)
-    let mut data = [0x80, 0x00];
-    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
-    print_response(&mut stim.borrow_mut(), "SetStandby", &data);
-
-    // send
+    // // SetStandby(STDBY_RC)
+    // let mut data = [0x80, 0x00];
+    // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
+    // print_response(&mut stim.borrow_mut(), "SetStandby", &data);
 
     // read_cmd(0xc0, [00])
     // write_buff(0x00, [01, 02, 03])
 
+    // 3. Send the payload to the data buffer by issuing the command
+
+    // WriteBuffer(offset, data)
+    let header0 = ADV_NONCONN_IND << 4 | 0b0011; // TODO?
+    let payload_length = 10;
+    // TODO: randomize device address
+    let mut data = [
+        0x1a,
+        TX_BASE_ADDRESS,
+        header0,
+        payload_length << 2,
+        1,
+        2,
+        3,
+        4,
+        5,
+        6,
+        1,
+        2,
+        3,
+        4,
+    ];
+    spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
+    print_response(&mut stim.borrow_mut(), "WriteBuffer", &data);
+
+    // 4. Configure the DIOs and Interrupt sources (IRQs)
+
     // SetDioIrqParams(...)
-    let mut data = [0x8d, 0x40, 0x41, 0x40, 0x41, 0x00, 0x00, 0x00, 0x00];
+    let mut data = [0x8d, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00, 0x00]; // TODO?
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetDioIrqParams", &data);
 
@@ -249,18 +317,30 @@ pub fn radio<'a>(
     // spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     // iprintln!(&mut stim.borrow_mut(), "response: {:?}", data);
 
+    // 5. Once configured, set the transceiver in transmitter mode to start transmission
+
     // SetTx(periodBase, periodBaseCount[15:8], periodBaseCount[7:0])
-    let mut data = [0x83, 0x00, 0x00, 0x00];
+    let timeout_period_base = 0x00; // 15.625 μs
+    let timeout_period_count = 0;
+    let mut data = [
+        0x83,
+        0x00,
+        (timeout_period_count >> 8) as u8,
+        timeout_period_count as u8,
+    ];
     spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
     print_response(&mut stim.borrow_mut(), "SetTx", &data);
 
-    // read_cmd(0xc0, [00])
+    // 6. Optionally check the packet status to make sure that the packet has been sent properly
 
     loop {
         // GetPacketStatus()
         let mut data = [0x1d, 0, 0, 0, 0, 0, 0];
         spi_radio_transmit(&mut spi.borrow_mut(), &mut delay.borrow_mut(), &mut data);
         print_response(&mut stim.borrow_mut(), "GetPacketStatus", &data);
-        delay.borrow_mut().delay_ms(100);
+        delay.borrow_mut().delay_ms(1000);
     }
+
+    // 7. Clear TxDone or RxTxTimeout IRQ
+    // TODO!
 }
