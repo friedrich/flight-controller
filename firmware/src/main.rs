@@ -3,6 +3,7 @@
 
 mod gnss;
 mod imu;
+mod motors;
 mod radio;
 mod spi;
 
@@ -149,6 +150,9 @@ fn main() -> ! {
     iprintln!(&mut stim.borrow_mut(), "IMU found");
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
+
+    motors::init(&dp);
+    motors::init_servos(&dp, 50, 50, 50);
 
     gnss::gnss(
         &dp,
