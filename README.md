@@ -14,10 +14,18 @@
   - SDI
   - SDO
   - SCK
+  - RESET
   - ...?
 - Print version number on the PCB.
 - Remove small compenents slik screen labels.
 - Make it possible to manually pull up the BOOT0 pin in case the firmware disrupts SWD communication.
+- The top internal layer should be a ground plane to ensure a nice return path for the RF signal. Make a 6 layer board?
+  - Signal
+  - GND
+  - Signal
+  - Power
+  - Signal
+  - GND
 
 TODO: check if MAIN_SENSE and TAIL_SENSE work!
 

@@ -56,7 +56,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "write_cmd(0x{:02x}, {:?})",
+            "write_cmd(0x{:02x}, {:02x?})",
             command,
             data
         );
@@ -88,7 +88,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "read_cmd(0x{:02x}, {:?})",
+            "read_cmd(0x{:02x}, {:02x?})",
             command,
             data
         );
@@ -120,7 +120,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "write_regs(0x{:04x}, {:?})",
+            "write_regs(0x{:04x}, {:02x?})",
             reg,
             data
         );
@@ -134,7 +134,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "read_regs(0x{:04x}, {:?})",
+            "read_regs(0x{:04x}, {:02x?})",
             reg,
             data
         );
@@ -150,7 +150,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "write_buff(0x{:02x}, {:?})",
+            "write_buff(0x{:02x}, {:02x?})",
             offset,
             data
         );
@@ -164,7 +164,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "read_buff(0x{:02x}, {:?})",
+            "read_buff(0x{:02x}, {:02x?})",
             offset,
             data
         );
@@ -178,7 +178,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "prefix_read({:?}, {:?})",
+            "prefix_read({:02x?}, {:02x?})",
             prefix,
             data
         );
@@ -192,7 +192,7 @@ impl<'a> Hal for RadioHal<'a> {
     ) -> Result<(), radio_sx128x::Error<Self::CommsError, Self::PinError, Self::DelayError>> {
         iprintln!(
             &mut self.stim.borrow_mut(),
-            "prefix_write({:?}, {:?})",
+            "prefix_write({:02x?}, {:02x?})",
             prefix,
             data
         );

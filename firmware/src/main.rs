@@ -358,18 +358,19 @@ fn main() -> ! {
     let delay = RefCell::new(cortex_m::delay::Delay::new(cp.SYST, AHB_CLOCK_FREQUENCY));
     let mut spi = RefCell::new(Spi::new(&dp));
 
-    iprint!(&mut stim.borrow_mut(), "waiting for radio... ");
-    init_radio(&mut spi.borrow_mut(), &delay, &stim);
-    iprintln!(&mut stim.borrow_mut(), "done");
+    // Communication with the radio peripheral has to happen very soon after
+    // reset in order for it to detect SPI communication and not to switch to
+    // UART and disturbe the SPI bus. This is currently only achieved when
+    // compiling in release mode.
+    init_radio(&mut spi.borrow_mut(), &delay);
+    iprintln!(&mut stim.borrow_mut(), "radio found");
 
     led(&dp, LED_COUNTER_PERIOD / 2, LED_COUNTER_PERIOD / 8, 0);
 
-    // wait for accelerometer to become available
-    iprint!(&mut stim.borrow_mut(), "waiting for accelerometer... ");
     while accel_read(&mut spi.borrow_mut(), &mut delay.borrow_mut(), 0x0f) != 0x6b {
         delay.borrow_mut().delay_ms(1);
     }
-    iprintln!(&mut stim.borrow_mut(), "done");
+    iprintln!(&mut stim.borrow_mut(), "IMU found");
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
 
