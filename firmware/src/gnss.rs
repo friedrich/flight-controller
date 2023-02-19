@@ -2,10 +2,25 @@
 #![allow(clippy::cast_enum_truncation)]
 
 use crate::{pac, spi, Spi};
-use cortex_m::{delay, iprint};
+use cortex_m::delay;
 use cortex_m::{iprintln, peripheral::itm};
 use num_derive::FromPrimitive;
 use num_traits::FromPrimitive;
+
+#[derive(Debug, Copy, Clone, PartialEq, Eq, FromPrimitive)]
+enum UbxMessageType {
+    AckAck = 0x0501,
+    AckNak = 0x0500,
+    CfgMsg = 0x0601,
+    CfgNmea = 0x0617,
+    CfgPrt = 0x0600,
+    CfgRate = 0x0608,
+    LogInfo = 0x2108,
+    MonHw = 0x0a09,
+    MonHw2 = 0x0a0b,
+    MonMsgpp = 0x0a06,
+    NavStatus = 0x0103,
+}
 
 #[derive(Debug, Copy, Clone, PartialEq, Eq)]
 enum UbxEncodeError {
@@ -81,7 +96,7 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
                 if pos_in_message == message_size - 1 {
                     let message = &data[message_start..=pos];
                     let payload = &message[6..message.len() - 2];
-                    iprint!(stim, "UBX message at {}: ", message_start);
+                    // iprint!(stim, "UBX message at {}: ", message_start);
 
                     match UbxMessageType::from_u16(message_type_id) {
                         Some(UbxMessageType::CfgNmea) => {
@@ -112,10 +127,10 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
                             //     | u32::from(payload[9]) << 8
                             //     | u32::from(payload[10]) << 16
                             //     | u32::from(payload[11]) << 24;
-                            let msss = u32::from(payload[12])
-                                | u32::from(payload[13]) << 8
-                                | u32::from(payload[14]) << 16
-                                | u32::from(payload[15]) << 24;
+                            // let msss = u32::from(payload[12])
+                            //     | u32::from(payload[13]) << 8
+                            //     | u32::from(payload[14]) << 16
+                            //     | u32::from(payload[15]) << 24;
 
                             if fix == 0 {
                                 crate::led(
@@ -128,12 +143,27 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
                                 crate::led(dp, 0, 0, crate::LED_COUNTER_PERIOD / 2);
                             }
 
+                            iprintln!(stim, "fix {}, flags {:08b}", payload[4], flags);
+                        }
+                        Some(UbxMessageType::MonHw) => {
+                            let noise_per_ms = u16::from(payload[16]) | u16::from(payload[17]) << 8;
+                            let agc_cnt = u16::from(payload[18]) | u16::from(payload[19]) << 8;
+
+                            iprintln!(stim, "noisePerMS {:6}, agcCnt {:6}", noise_per_ms, agc_cnt);
+                        }
+                        Some(UbxMessageType::MonHw2) => {
+                            let ofs_i = payload[0] as i8;
+                            let mag_i = payload[1];
+                            let ofs_q = payload[2] as i8;
+                            let mag_q = payload[3];
+
                             iprintln!(
                                 stim,
-                                "nav status: fix {}, flags {:08b}, time since reset {}",
-                                payload[4],
-                                flags,
-                                msss / 1000
+                                "ofsI {:3}, magI {:3}, ofsQ {:3}, magQ {:3}",
+                                ofs_i,
+                                mag_i,
+                                ofs_q,
+                                mag_q
                             );
                         }
                         _ => {
@@ -210,19 +240,6 @@ fn ubx_encode<'a>(
     Ok(ret)
 }
 
-#[derive(Debug, Copy, Clone, PartialEq, Eq, FromPrimitive)]
-enum UbxMessageType {
-    AckAck = 0x0501,
-    AckNak = 0x0500,
-    CfgMsg = 0x0601,
-    CfgNmea = 0x0617,
-    CfgPrt = 0x0600,
-    CfgRate = 0x0608,
-    LogInfo = 0x2108,
-    MonMsgpp = 0x0a06,
-    NavStatus = 0x0103,
-}
-
 pub fn gnss<'a>(
     dp: &'a pac::Peripherals,
     spi: &'a mut Spi,
@@ -238,18 +255,21 @@ pub fn gnss<'a>(
         gnss_transmit(spi, delay, UbxMessageType::CfgMsg, &[0xf0, i, 0], &mut data).unwrap();
     }
 
-    gnss_transmit(
-        spi,
-        delay,
-        UbxMessageType::CfgMsg,
-        &[
-            (UbxMessageType::NavStatus as u16 >> 8) as u8,
-            UbxMessageType::NavStatus as u8,
-            1,
-        ],
-        &mut data,
-    )
-    .unwrap();
+    let poll_message_types = [
+        UbxMessageType::NavStatus,
+        UbxMessageType::MonHw,
+        UbxMessageType::MonHw2,
+    ];
+    for msg in poll_message_types {
+        gnss_transmit(
+            spi,
+            delay,
+            UbxMessageType::CfgMsg,
+            &[(msg as u16 >> 8) as u8, msg as u8, 1],
+            &mut data,
+        )
+        .unwrap();
+    }
 
     // gnss_transmit(spi, delay, stim, UbxMessageType::CfgPrt, &[0x04], &mut data);
     // let size = spi_gnss_transmit(dp, stim, delay, UbxMessageType::MonMsgpp, &[], &mut ret);
