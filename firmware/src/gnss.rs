@@ -117,7 +117,7 @@ fn gnss_parse(stim: &mut itm::Stim, dp: &pac::Peripherals, data: &[u8]) {
                                 | u32::from(payload[15]) << 24;
 
                             if fix == 0 {
-                                crate::led(dp, crate::LED_COUNTER_PERIOD / 2, 0, 0);
+                                crate::led(dp, crate::LED_COUNTER_PERIOD / 2, 0, crate::LED_COUNTER_PERIOD / 2);
                             } else {
                                 crate::led(dp, 0, 0, crate::LED_COUNTER_PERIOD / 2);
                             }
