@@ -33,3 +33,13 @@ macro_rules! pin_mode_alternate_l {
         }
     };
 }
+
+#[macro_export]
+macro_rules! pin_mode_analog {
+    ($gpio:expr, $num:literal, $pull:expr) => {
+        paste::paste! {
+            $gpio.pupdr.modify(|_, w| w.[<pupdr $num>]().variant($pull));
+            $gpio.moder.modify(|_, w| w.[<moder $num>]().analog());
+        }
+    };
+}

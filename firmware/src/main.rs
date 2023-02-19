@@ -116,7 +116,7 @@ fn main() -> ! {
 
     led(&dp, 0, LED_COUNTER_PERIOD / 2, 0);
 
-    motors::init(&dp);
+    motors::init(&dp, &mut stim.borrow_mut(), &mut delay.borrow_mut());
     motors::init_servos(&dp, 50, 50, 50);
 
     gnss::gnss(

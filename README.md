@@ -26,7 +26,12 @@
   - Power
   - Signal
   - GND
-- Move motor current sensing away from PF0 and PF1 since they are not connected to any operational amplifiers.
+- Move motor current sensing away from PF0 and PF1 since they are not connected to any operational amplifiers. Possible pins are:
+  - OPAMP1_VINP: PA1, PA3, PA7
+  - OPAMP2_VINP: PA7, PB0
+- Check if all timers support the required operations.
+- For some reason the sense signal of the tail motor is much more noisy.
+- Increase shunt resistor to 50 mOhm? Or 100 mOhm?
 
 TODO: check if MAIN_SENSE and TAIL_SENSE work!
 
@@ -56,3 +61,4 @@ TODO: check if MAIN_SENSE and TAIL_SENSE work!
 | PB7  | LED_B      |
 | PF0  | MAIN_SENSE |
 | PF1  | TAIL_SENSE |
+

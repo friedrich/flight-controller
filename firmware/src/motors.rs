@@ -1,15 +1,23 @@
-use crate::pac::{self, gpioa, gpiob};
-use crate::{pin_mode_alternate_l, HSI16_CLOCK_FREQUENCY};
+use cortex_m::peripheral::itm;
+use cortex_m::{delay, iprint, iprintln};
 
-pub fn init(dp: &pac::Peripherals) {
+use crate::pac::{self, gpioa, gpiob, gpiof};
+use crate::{pin_mode_alternate_l, pin_mode_analog, HSI16_CLOCK_FREQUENCY};
+
+pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Delay) {
+    use gpioa::afrl::AFRL0_A::Af1 as Af1A;
     use gpioa::afrl::AFRL0_A::Af9;
     use gpioa::ospeedr::OSPEEDR0_A::HighSpeed as HighSpeedA;
     use gpioa::otyper::OT0_A::PushPull as PushPullA;
     use gpioa::pupdr::PUPDR0_A::Floating as FloatingA;
     use gpiob::afrl::AFRL0_A::Af1;
+    use gpiob::afrl::AFRL0_A::Af2;
     use gpiob::ospeedr::OSPEEDR0_A::HighSpeed as HighSpeedB;
     use gpiob::otyper::OT0_A::PushPull as PushPullB;
     use gpiob::pupdr::PUPDR0_A::Floating as FloatingB;
+    use gpiof::pupdr::PUPDR0_A::Floating as FloatingF;
+
+    // PWM output
 
     // enable IO port A and B clock
     dp.RCC.ahb2enr.modify(|_, w| w.gpioaen().enabled());
@@ -18,11 +26,17 @@ pub fn init(dp: &pac::Peripherals) {
     // enable timer clocks
     dp.RCC.apb2enr.modify(|_, w| w.tim15en().enabled());
     dp.RCC.apb2enr.modify(|_, w| w.tim16en().enabled());
+    dp.RCC.apb1enr1.modify(|_, w| w.tim2en().enabled()); // TODO: temporary
+    dp.RCC.apb1enr1.modify(|_, w| w.tim4en().enabled()); // TODO: temporary
 
-    pin_mode_alternate_l!(dp.GPIOA, 1, PushPullA, FloatingA, HighSpeedA, Af9); // AF9: TIM15_CH1N, AF1: TIM2_CH2,
+    // TODO: change to low speed?
+    pin_mode_alternate_l!(dp.GPIOA, 1, PushPullA, FloatingA, HighSpeedA, Af9); // AF9: TIM15_CH1N, AF1: TIM2_CH2
     pin_mode_alternate_l!(dp.GPIOB, 6, PushPullB, FloatingB, HighSpeedB, Af1); // AF1: TIM16_CH1N, AF2: TIM4_CH1, AF5: TIM8_CH1
 
-    const COUNTER_PERIOD: u32 = 100;
+    pin_mode_alternate_l!(dp.GPIOA, 1, PushPullA, FloatingA, HighSpeedA, Af1A); // TODO: temporary, AF1: TIM2_CH2
+    pin_mode_alternate_l!(dp.GPIOB, 6, PushPullB, FloatingB, HighSpeedB, Af2); // TODO: temporary, AF2: TIM4_CH1
+
+    const COUNTER_PERIOD: u32 = 1000;
     const FREQUENCY: u32 = 3_000;
     const COUNTER_FREQUENCY: u32 = FREQUENCY * COUNTER_PERIOD;
     const PRESCALER_PERIOD: u16 = (HSI16_CLOCK_FREQUENCY / COUNTER_FREQUENCY) as u16; // TODO: reverse calculation, since the rounding error can be big
@@ -30,30 +44,114 @@ pub fn init(dp: &pac::Peripherals) {
     // set prescaler period
     dp.TIM15.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1));
     dp.TIM16.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1));
+    dp.TIM2.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1)); // TODO: temporary
+    dp.TIM4.psc.modify(|_, w| w.psc().variant(PRESCALER_PERIOD - 1)); // TODO: temporary
 
     // set counter period
     dp.TIM15.arr.modify(|_, w| w.arr().variant(COUNTER_PERIOD - 1));
     dp.TIM16.arr.modify(|_, w| w.arr().variant(COUNTER_PERIOD - 1));
+    dp.TIM2.arr.modify(|_, w| w.arr().variant(COUNTER_PERIOD - 1)); // TODO: temporary
+    dp.TIM4.arr.modify(|_, w| w.arr().variant(COUNTER_PERIOD - 1)); // TODO: temporary
 
     // set duty cycle
-    dp.TIM15.ccr1().modify(|_, w| w.ccr().variant(0));
-    dp.TIM16.ccr1().modify(|_, w| w.ccr().variant(0));
+    dp.TIM15.ccr1().modify(|_, w| w.ccr().variant(COUNTER_PERIOD / 10));
+    dp.TIM16.ccr1().modify(|_, w| w.ccr().variant(COUNTER_PERIOD / 10));
+    dp.TIM2.ccr2().modify(|_, w| w.ccr().variant(COUNTER_PERIOD / 10)); // TODO: temporary
+    dp.TIM4.ccr1().modify(|_, w| w.ccr().variant(COUNTER_PERIOD / 10)); // TODO: temporary
 
     // set PWM mode 1
     dp.TIM15.ccmr1_output().modify(|_, w| w.oc1m().bits(0b110));
     dp.TIM16.ccmr1_output().modify(|_, w| w.oc1m().bits(0b110));
+    dp.TIM2.ccmr1_output().modify(|_, w| w.oc2m().bits(0b110)); // TODO: temporary
+    dp.TIM4.ccmr1_output().modify(|_, w| w.oc1m().bits(0b110)); // TODO: temporary
 
-    // select active low polarity
+    // select polarity
     dp.TIM15.ccer.modify(|_, w| w.cc1p().set_bit());
     dp.TIM16.ccer.modify(|_, w| w.cc1p().set_bit());
+    dp.TIM2.ccer.modify(|_, w| w.cc2p().clear_bit()); // TODO: temporary
+    dp.TIM4.ccer.modify(|_, w| w.cc1p().clear_bit()); // TODO: temporary
 
     // enable output
     dp.TIM15.ccer.modify(|_, w| w.cc1e().set_bit());
     dp.TIM16.ccer.modify(|_, w| w.cc1e().set_bit());
+    dp.TIM2.ccer.modify(|_, w| w.cc2e().set_bit()); // TODO: temporary
+    dp.TIM4.ccer.modify(|_, w| w.cc1e().set_bit()); // TODO: temporary
 
     // enable counter
     dp.TIM15.cr1.modify(|_, w| w.cen().set_bit());
     dp.TIM16.cr1.modify(|_, w| w.cen().set_bit());
+    dp.TIM2.cr1.modify(|_, w| w.cen().set_bit()); // TODO: temporary
+    dp.TIM4.cr1.modify(|_, w| w.cen().set_bit()); // TODO: temporary
+
+    // current sense
+
+    // enable IO port F clock
+    dp.RCC.ahb2enr.modify(|_, w| w.gpiofen().enabled());
+
+    pin_mode_analog!(dp.GPIOF, 0, FloatingF); // ADC1_IN10
+    pin_mode_analog!(dp.GPIOF, 1, FloatingF); // ADC2_IN10
+
+    // enable ADC clocks
+    dp.RCC.ahb2enr.modify(|_, w| w.adc12en().set_bit());
+
+    // select clock source
+    dp.RCC.ccipr.modify(|_, w| w.adc12sel().variant(0b10));
+
+    // start ADC
+    dp.ADC1.cr.modify(|_, w| w.deeppwd().clear_bit());
+    dp.ADC1.cr.modify(|_, w| w.advregen().set_bit());
+    dp.ADC2.cr.modify(|_, w| w.deeppwd().clear_bit());
+    dp.ADC2.cr.modify(|_, w| w.advregen().set_bit());
+    delay.delay_us(20); // TODO: value?
+
+    // calibrate ADC
+    dp.ADC1.cr.modify(|_, w| w.adcaldif().clear_bit()); // single-ended input
+    dp.ADC1.cr.modify(|_, w| w.adcal().set_bit());
+    dp.ADC2.cr.modify(|_, w| w.adcaldif().clear_bit()); // single-ended input
+    dp.ADC2.cr.modify(|_, w| w.adcal().set_bit());
+    while dp.ADC1.cr.read().adcal().bit_is_set() {}
+    while dp.ADC2.cr.read().adcal().bit_is_set() {}
+
+    // TODO: wait four cycles?
+
+    // To convert a single channel, program a sequence with a length of 1.
+    dp.ADC1.sqr1.modify(|_, w| w.sq1().variant(10));
+    dp.ADC2.sqr1.modify(|_, w| w.sq1().variant(10));
+
+    // enable ADC
+    dp.ADC1.isr.modify(|_, w| w.adrdy().clear());
+    dp.ADC1.cr.modify(|_, w| w.aden().set_bit());
+    while dp.ADC1.isr.read().adrdy().bit_is_clear() {}
+    dp.ADC2.isr.modify(|_, w| w.adrdy().clear());
+    dp.ADC2.cr.modify(|_, w| w.aden().set_bit());
+    while dp.ADC2.isr.read().adrdy().bit_is_clear() {}
+
+    loop {
+        let mut sum1: u64 = 0;
+        let mut sum2: u64 = 0;
+        let count = 100;
+
+        iprint!(stim, "measurement... ");
+        for _ in 0..count {
+            dp.ADC1.cr.modify(|_, w| w.adstart().set_bit());
+            dp.ADC2.cr.modify(|_, w| w.adstart().set_bit());
+            while dp.ADC1.cr.read().adstart().bit_is_set() {}
+            while dp.ADC2.cr.read().adstart().bit_is_set() {}
+
+            let value1 = dp.ADC1.dr.read().bits();
+            let value2 = dp.ADC2.dr.read().bits();
+
+            sum1 += value1 as u64;
+            sum2 += value2 as u64;
+        }
+        iprintln!(
+            stim,
+            "done: {:6} {:6}",
+            100 * sum1 / count,
+            100 * sum2 / count
+        );
+        delay.delay_ms(1000);
+    }
 }
 
 pub fn init_servos(p: &pac::Peripherals, left_percent: u8, right_percent: u8, back_percent: u8) {
