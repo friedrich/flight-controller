@@ -3,7 +3,6 @@ use core::ptr;
 use cortex_m::delay;
 
 use crate::pac;
-use crate::pac::{gpioa, gpiob};
 use crate::{pin_mode_alternate_l, pin_mode_output};
 
 #[derive(Copy, Clone, Debug, PartialEq, Eq)]
@@ -20,27 +19,20 @@ pub struct Spi<'a> {
 
 impl<'a> Spi<'a> {
     pub fn new(dp: &'a pac::Peripherals) -> Spi<'a> {
-        use gpioa::afrl::AFRL0_A::Af5;
-        use gpioa::ospeedr::OSPEEDR0_A::VeryHighSpeed as AVeryHighSpeed;
-        use gpioa::otyper::OT0_A::PushPull as APushPull;
-        use gpioa::pupdr::PUPDR0_A::Floating as AFloating;
-        use gpiob::ospeedr::OSPEEDR0_A::VeryHighSpeed as BVeryHighSpeed;
-        use gpiob::otyper::OT0_A::PushPull as BPushPull;
-
         // enable clocks
         dp.RCC.apb2enr.modify(|_, w| w.spi1en().enabled());
         dp.RCC.ahb2enr.modify(|_, w| w.gpioaen().enabled());
         dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
 
         // configure CS pins
-        pin_mode_output!(dp.GPIOA, 3, APushPull, AVeryHighSpeed, true);
-        pin_mode_output!(dp.GPIOA, 4, APushPull, AVeryHighSpeed, true);
-        pin_mode_output!(dp.GPIOB, 0, BPushPull, BVeryHighSpeed, true);
+        pin_mode_output!(dp, A, 3, PushPull, VeryHighSpeed, true);
+        pin_mode_output!(dp, A, 4, PushPull, VeryHighSpeed, true);
+        pin_mode_output!(dp, B, 0, PushPull, VeryHighSpeed, true);
 
         // configure SPI pins
-        pin_mode_alternate_l!(dp.GPIOA, 5, APushPull, AFloating, AVeryHighSpeed, Af5);
-        pin_mode_alternate_l!(dp.GPIOA, 6, APushPull, AFloating, AVeryHighSpeed, Af5);
-        pin_mode_alternate_l!(dp.GPIOA, 7, APushPull, AFloating, AVeryHighSpeed, Af5);
+        pin_mode_alternate_l!(dp, A, 5, PushPull, Floating, VeryHighSpeed, Af5);
+        pin_mode_alternate_l!(dp, A, 6, PushPull, Floating, VeryHighSpeed, Af5);
+        pin_mode_alternate_l!(dp, A, 7, PushPull, Floating, VeryHighSpeed, Af5);
 
         // configure SPI
         dp.SPI1.cr1.modify(|_, w| w.rxonly().clear_bit().bidimode().clear_bit()); // full duplex mode

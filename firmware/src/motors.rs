@@ -1,22 +1,10 @@
 use cortex_m::peripheral::itm;
 use cortex_m::{delay, iprint, iprintln};
 
-use crate::pac::{self, gpioa, gpiob, gpiof};
+use crate::pac;
 use crate::{pin_mode_alternate_l, pin_mode_analog, HSI16_CLOCK_FREQUENCY};
 
 pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Delay) {
-    use gpioa::afrl::AFRL0_A::Af1 as Af1A;
-    use gpioa::afrl::AFRL0_A::Af9;
-    use gpioa::ospeedr::OSPEEDR0_A::HighSpeed as HighSpeedA;
-    use gpioa::otyper::OT0_A::PushPull as PushPullA;
-    use gpioa::pupdr::PUPDR0_A::Floating as FloatingA;
-    use gpiob::afrl::AFRL0_A::Af1;
-    use gpiob::afrl::AFRL0_A::Af2;
-    use gpiob::ospeedr::OSPEEDR0_A::HighSpeed as HighSpeedB;
-    use gpiob::otyper::OT0_A::PushPull as PushPullB;
-    use gpiob::pupdr::PUPDR0_A::Floating as FloatingB;
-    use gpiof::pupdr::PUPDR0_A::Floating as FloatingF;
-
     // PWM output
 
     // enable IO port A and B clock
@@ -30,11 +18,11 @@ pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Dela
     dp.RCC.apb1enr1.modify(|_, w| w.tim4en().enabled()); // TODO: temporary
 
     // TODO: change to low speed?
-    pin_mode_alternate_l!(dp.GPIOA, 1, PushPullA, FloatingA, HighSpeedA, Af9); // AF9: TIM15_CH1N, AF1: TIM2_CH2
-    pin_mode_alternate_l!(dp.GPIOB, 6, PushPullB, FloatingB, HighSpeedB, Af1); // AF1: TIM16_CH1N, AF2: TIM4_CH1, AF5: TIM8_CH1
+    pin_mode_alternate_l!(dp, A, 1, PushPull, Floating, HighSpeed, Af9); // AF9: TIM15_CH1N, AF1: TIM2_CH2
+    pin_mode_alternate_l!(dp, B, 6, PushPull, Floating, HighSpeed, Af1); // AF1: TIM16_CH1N, AF2: TIM4_CH1, AF5: TIM8_CH1
 
-    pin_mode_alternate_l!(dp.GPIOA, 1, PushPullA, FloatingA, HighSpeedA, Af1A); // TODO: temporary, AF1: TIM2_CH2
-    pin_mode_alternate_l!(dp.GPIOB, 6, PushPullB, FloatingB, HighSpeedB, Af2); // TODO: temporary, AF2: TIM4_CH1
+    pin_mode_alternate_l!(dp, A, 1, PushPull, Floating, HighSpeed, Af1); // TODO: temporary, AF1: TIM2_CH2
+    pin_mode_alternate_l!(dp, B, 6, PushPull, Floating, HighSpeed, Af2); // TODO: temporary, AF2: TIM4_CH1
 
     const COUNTER_PERIOD: u32 = 1000;
     const FREQUENCY: u32 = 3_000;
@@ -88,8 +76,8 @@ pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Dela
     // enable IO port F clock
     dp.RCC.ahb2enr.modify(|_, w| w.gpiofen().enabled());
 
-    pin_mode_analog!(dp.GPIOF, 0, FloatingF); // ADC1_IN10
-    pin_mode_analog!(dp.GPIOF, 1, FloatingF); // ADC2_IN10
+    pin_mode_analog!(dp, F, 0, Floating); // ADC1_IN10
+    pin_mode_analog!(dp, F, 1, Floating); // ADC2_IN10
 
     // enable ADC clocks
     dp.RCC.ahb2enr.modify(|_, w| w.adc12en().set_bit());

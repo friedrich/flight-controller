@@ -2,9 +2,9 @@
 #![no_main]
 
 mod gnss;
-mod hal;
 mod imu;
 mod motors;
+mod pins;
 mod radio;
 mod spi;
 
@@ -15,27 +15,21 @@ use panic_itm as _;
 use radio::{init_radio, radio};
 use spi::Spi;
 use stm32g4::stm32g4a1 as pac;
-use stm32g4::stm32g4a1::{gpioa, gpiob};
 
 const HSI16_CLOCK_FREQUENCY: u32 = 16_000_000;
 const AHB_CLOCK_FREQUENCY: u32 = HSI16_CLOCK_FREQUENCY;
 const LED_COUNTER_PERIOD: u32 = 16_000;
 
 fn init_led(dp: &pac::Peripherals) {
-    use gpiob::afrl::AFRL0_A::{Af10, Af2};
-    use gpiob::ospeedr::OSPEEDR0_A::LowSpeed;
-    use gpiob::otyper::OT0_A::OpenDrain;
-    use gpiob::pupdr::PUPDR0_A::Floating;
-
     // enable IO port B clock
     dp.RCC.ahb2enr.modify(|_, w| w.gpioben().enabled());
 
     // enable TIM3 timer clock
     dp.RCC.apb1enr1.modify(|_, w| w.tim3en().enabled());
 
-    pin_mode_alternate_l!(dp.GPIOB, 4, OpenDrain, Floating, LowSpeed, Af2);
-    pin_mode_alternate_l!(dp.GPIOB, 5, OpenDrain, Floating, LowSpeed, Af2);
-    pin_mode_alternate_l!(dp.GPIOB, 7, OpenDrain, Floating, LowSpeed, Af10);
+    pin_mode_alternate_l!(dp, B, 4, OpenDrain, Floating, LowSpeed, Af2);
+    pin_mode_alternate_l!(dp, B, 5, OpenDrain, Floating, LowSpeed, Af2);
+    pin_mode_alternate_l!(dp, B, 7, OpenDrain, Floating, LowSpeed, Af10);
 
     const FREQUENCY: u32 = 1_000;
     const COUNTER_FREQUENCY: u32 = FREQUENCY * LED_COUNTER_PERIOD;
@@ -79,12 +73,10 @@ fn led(p: &pac::Peripherals, red: u32, green: u32, blue: u32) {
 }
 
 fn pull_up_unconnected_pins(dp: &pac::Peripherals) {
-    use gpioa::pupdr::PUPDR0_A::PullUp;
-
-    pin_mode_input!(dp.GPIOA, 0, PullUp);
-    pin_mode_input!(dp.GPIOA, 8, PullUp);
-    pin_mode_input!(dp.GPIOA, 9, PullUp);
-    pin_mode_input!(dp.GPIOA, 15, PullUp);
+    pin_mode_input!(dp, A, 0, PullUp);
+    pin_mode_input!(dp, A, 8, PullUp);
+    pin_mode_input!(dp, A, 9, PullUp);
+    pin_mode_input!(dp, A, 15, PullUp);
 }
 
 #[entry]
