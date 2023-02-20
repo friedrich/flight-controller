@@ -5,6 +5,10 @@ use crate::pac;
 use crate::{pin_mode_alternate_l, pin_mode_analog, HSI16_CLOCK_FREQUENCY};
 
 pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Delay) {
+    use pac::opamp::opamp1_csr::PGA_GAIN_A::Gain64;
+    use pac::opamp::opamp1_csr::VM_SEL_A::Pga;
+    use pac::opamp::opamp1_csr::VP_SEL_A::Vinp1;
+
     // PWM output
 
     // enable IO port A and B clock
@@ -71,7 +75,27 @@ pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Dela
     dp.TIM2.cr1.modify(|_, w| w.cen().set_bit()); // TODO: temporary
     dp.TIM4.cr1.modify(|_, w| w.cen().set_bit()); // TODO: temporary
 
-    // current sense
+    // op amp
+
+    pin_mode_analog!(dp, A, 3, Floating); // OPAMP1_VINP1
+
+    // enable clock
+    dp.RCC.apb2enr.modify(|_, w| w.syscfgen().set_bit());
+
+    // TODO: calibrate op amp?
+    // dp.OPAMP.opamp1_csr.modify(|_, w| w.opaen().set_bit());
+    // dp.OPAMP.opamp1_csr.modify(|_, w| w.usertrim().set_bit());
+
+    // configure op amp
+    dp.OPAMP.opamp1_csr.modify(|_, w| w.pga_gain().variant(Gain64));
+    dp.OPAMP.opamp1_csr.modify(|_, w| w.vp_sel().variant(Vinp1));
+    dp.OPAMP.opamp1_csr.modify(|_, w| w.vm_sel().variant(Pga));
+    dp.OPAMP.opamp1_csr.modify(|_, w| w.opaintoen().set_bit()); // ADC1_IN13
+
+    // enable op amp
+    dp.OPAMP.opamp1_csr.modify(|_, w| w.opaen().set_bit());
+
+    // ADC
 
     // enable IO port F clock
     dp.RCC.ahb2enr.modify(|_, w| w.gpiofen().enabled());
@@ -104,6 +128,7 @@ pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Dela
 
     // To convert a single channel, program a sequence with a length of 1.
     dp.ADC1.sqr1.modify(|_, w| w.sq1().variant(10));
+    dp.ADC1.sqr1.modify(|_, w| w.sq1().variant(13)); // TODO: temporary
     dp.ADC2.sqr1.modify(|_, w| w.sq1().variant(10));
 
     // enable ADC
@@ -117,7 +142,7 @@ pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Dela
     loop {
         let mut sum1: u64 = 0;
         let mut sum2: u64 = 0;
-        let count = 100;
+        let count = 1000;
 
         iprint!(stim, "measurement... ");
         for _ in 0..count {
@@ -138,7 +163,6 @@ pub fn init(dp: &pac::Peripherals, stim: &mut itm::Stim, delay: &mut delay::Dela
             100 * sum1 / count,
             100 * sum2 / count
         );
-        delay.delay_ms(1000);
     }
 }
 

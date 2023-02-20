@@ -32,6 +32,7 @@
 - Check if all timers support the required operations.
 - For some reason the sense signal of the tail motor is much more noisy.
 - Increase shunt resistor to 50 mOhm? Or 100 mOhm?
+- Add capacitor parallel to shunt?
 
 TODO: check if MAIN_SENSE and TAIL_SENSE work!
 
