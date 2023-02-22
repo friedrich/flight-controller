@@ -11,9 +11,7 @@
 - :heavy_check_mark: Pulse width modulated power supply of the main and tail rotor motors
 - :x: Current monitor of the main and tail rotor motors
   - Pins PF0 and PF1 are not connected to any operational amplifiers. This makes
-    current sensing inaccurate, since the shunt voltage is quite low. Pins
-    connected to OPAMP1 are: PA1, PA3, PA7. Pins connected to OPAMP2 are PA7,
-    PB0.
+    current sensing inaccurate, since the shunt voltage is quite low.
 - :heavy_check_mark: PWM control of the swashplate servos
 - :heavy_check_mark: Programming and debugging interface via SWD and SWO
 - :heavy_check_mark: Linear acceleration sensor and gyroscope
@@ -31,6 +29,8 @@
 - Connect reset pins of other ICs to the microcontroller.
 - Connect the SX1280 busy pin and multi-purpose digital I/O pins to the
   microcontroller.
+- Connect one PIO pin of the GNSS receiver to the microcontroller for TX ready
+  notification.
 - Add test points to GND, CS, SDI, SDO, SCK, RESET.
 - Print version number on the PCB.
 - Remove silk screen labels of small compenents.
